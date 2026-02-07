@@ -245,6 +245,17 @@ CREATE INDEX idx_categories_user ON categories(user_id);
 - **Erreurs** : Format uniforme `{ error: { code: "VALIDATION_ERROR", message: "...", details: [...] } }`
 - **Versioning** : Préfixe URL `/api/v1`
 
+**Convention importante — Pas de trailing slash :**
+
+Les routes "collection" utilisent `@router.get("")` (chaîne vide) et **jamais** `@router.get("/")`.
+FastAPI est configuré avec `redirect_slashes=False`.
+
+> **Pourquoi ?** Quand le frontend (Vite proxy sur `:3000`) appelle `/api/v1/accounts`
+> et que FastAPI a une route `/accounts/`, il renvoie un **307 redirect** vers
+> `http://localhost:8000/api/v1/accounts/`. Le navigateur suit ce redirect
+> en cross-origin et **supprime le header `Authorization`** (comportement standard).
+> Résultat : 401 Unauthorized. Voir [TROUBLESHOOTING.md](TROUBLESHOOTING.md) pour les détails.
+
 ---
 
 ## 5. Architecture Backend
@@ -542,6 +553,110 @@ on push to main:
 
 | Environnement | Usage | Infrastructure |
 |--------------|-------|----------------|
-| **Local** | Développement | Docker Compose sur machine dev |
+| **Local** | Développement | Docker Compose (infra) + processus natifs (app) |
 | **Staging** | Tests pré-production | Même serveur Hetzner, namespace séparé |
 | **Production** | Utilisateurs finaux | Serveur Hetzner dédié |
+
+---
+
+## 11. Développement local
+
+### 11.1 Architecture locale
+
+En local, on sépare **l'infrastructure** (conteneurisée) de **l'application** (native) pour bénéficier du hot-reload :
+
+```
+┌─────────────────────────────────────────────────────┐
+│                Machine développeur                    │
+│                                                      │
+│  ┌─────────────────────────────┐   ┌──────────────┐ │
+│  │ Docker Compose (infra)      │   │   Processus  │ │
+│  │  docker-compose.dev.yml     │   │   natifs     │ │
+│  │                             │   │              │ │
+│  │  ┌──────────┐ ┌──────────┐ │   │  uvicorn     │ │
+│  │  │PostgreSQL│ │  Redis   │ │◀──│  (backend)   │ │
+│  │  │  :5432   │ │  :6379   │ │   │  :8000       │ │
+│  │  └──────────┘ └──────────┘ │   │              │ │
+│  │                             │   │  vite        │ │
+│  │  ┌──────────┐              │   │  (frontend)  │ │
+│  │  │ Adminer  │              │   │  :3000       │ │
+│  │  │  :8080   │              │   │              │ │
+│  │  └──────────┘              │   └──────────────┘ │
+│  └─────────────────────────────┘                    │
+└─────────────────────────────────────────────────────┘
+```
+
+> **Note :** Terraform n'est pas utilisé en local. Il sert uniquement à provisionner
+> l'infrastructure cloud (Hetzner). En local, Docker Compose joue le rôle d'IaC
+> pour les services d'infrastructure (base de données, cache).
+
+### 11.2 Scripts et commandes
+
+Tous les scripts sont accessibles via le `Makefile` à la racine du projet :
+
+```bash
+make help           # Affiche toutes les commandes disponibles
+```
+
+**Premier lancement :**
+
+```bash
+make setup          # Installe tout (venv, npm, .env, lance PG+Redis)
+```
+
+**Développement quotidien :**
+
+```bash
+make dev            # Lance tout (infra + backend + frontend), Ctrl+C pour arrêter
+# OU séparément :
+make dev-infra      # PostgreSQL + Redis + Adminer uniquement
+make dev-back       # Backend FastAPI avec hot-reload
+make dev-front      # Frontend Vite avec HMR
+make stop           # Arrête tous les services
+```
+
+**Tests et qualité :**
+
+```bash
+make test           # Tous les tests (back + front)
+make test-back      # pytest avec couverture
+make test-front     # lint + build check
+make lint           # Linters (ruff + eslint)
+make format         # Auto-format du code Python
+```
+
+**Base de données :**
+
+```bash
+make db-migrate msg="add users table"   # Créer une migration
+make db-upgrade                         # Appliquer les migrations
+make db-downgrade                       # Rollback dernière migration
+make db-reset                           # ⚠️ Reset complet de la BDD
+```
+
+**Docker (mode production-like) :**
+
+```bash
+make docker-up      # Tout en conteneurs (comme en prod)
+make docker-down    # Arrêter
+make docker-logs    # Voir les logs
+```
+
+### 11.3 URLs en développement
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| Frontend | http://localhost:3000 | Application React (Vite HMR) |
+| Backend | http://localhost:8000 | API FastAPI |
+| API Docs | http://localhost:8000/docs | Swagger UI auto-généré |
+| API Docs | http://localhost:8000/redoc | ReDoc |
+| Adminer | http://localhost:8080 | Interface web PostgreSQL |
+| Health | http://localhost:8000/health | Liveness probe |
+| Ready | http://localhost:8000/ready | Readiness probe (vérifie la BDD) |
+
+### 11.4 Fichiers Docker Compose
+
+| Fichier | Usage |
+|---------|-------|
+| `docker-compose.dev.yml` | **Dev local** — Infra uniquement (PG + Redis + Adminer) |
+| `docker-compose.yml` | **Production-like** — Tout conteneurisé (PG + Redis + Backend + Frontend) |

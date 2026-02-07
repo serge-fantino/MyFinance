@@ -1,6 +1,6 @@
 # MyFinance — Spécifications Fonctionnelles
 
-> Version 1.0 — Février 2026
+> Version 1.1 — Février 2026
 
 ---
 
@@ -87,6 +87,10 @@ Administrateur
 - Créer, modifier, archiver un compte
 - Voir la liste de ses comptes avec solde actuel calculé
 - Vue consolidée : solde total toutes devises converties
+- **Calibration du solde** : l'utilisateur fournit un solde connu à une date donnée.
+  Le système calcule rétroactivement le solde initial (`initial_balance = solde_connu - somme_transactions_jusqu'à_date`).
+  Le graphique de cashflow journalier reflète alors le vrai solde du compte.
+  Les champs `balance_reference_date` et `balance_reference_amount` sont stockés sur le compte.
 
 ### 3.3 Transactions
 
@@ -107,29 +111,56 @@ Administrateur
 
 **Opérations**
 - Liste paginée avec filtres :
-  - Par compte
-  - Par période (date début / fin)
-  - Par catégorie
+  - Par compte (ou tous les comptes)
+  - Par période (date début / fin, par mois, par plage personnalisée)
+  - Par catégorie (arborescence avec indentation)
+  - Par direction (revenus / dépenses)
   - Par montant (min / max)
-  - Par texte (recherche fulltext sur libellé)
+  - Par texte (recherche fulltext sur libellé, avec debounce)
 - Création manuelle d'une transaction
 - Modification (catégorie, notes, tags)
 - Suppression (soft delete)
+
+**Vue transactions enrichie**
+- Colonnes du tableau redimensionnables par l'utilisateur (drag & resize)
+- Tri dynamique par clic sur les en-têtes (date, montant, catégorie…)
+- Libellé complet affiché (pas de troncature)
+- Barre de filtres avancée intégrée en haut de page
+
+**KPIs dynamiques**
+- Nombre de transactions correspondant à la sélection/filtres actifs
+- Total des revenus filtrés
+- Total des dépenses filtrées
+- Solde net filtré (coloré vert si positif, rouge si négatif)
+
+**Graphique de cashflow intégré**
+- Affiché directement sur la page des transactions, pliable/dépliable
+- Deux granularités avec toggle :
+  - **Mensuel** : barres revenus (vert) / dépenses (rouge) par mois
+  - **Journalier** : courbe cumulative du solde dans le temps
+- Vue journalière :
+  - Courbe et aire colorées dynamiquement : vert quand le cumul est positif, rouge quand négatif
+  - Le cumul démarre depuis le `initial_balance` du compte (ou la somme pour tous les comptes)
+- Sélection interactive via brush (pinceau) pour filtrer les transactions affichées dans le tableau
+- Clic sur une barre mensuelle pour filtrer par mois
 
 ### 3.4 Import de données
 
 **Formats supportés (v1)**
 - **CSV** : Séparateur configurable, mapping de colonnes par l'utilisateur
 - **Excel (.xlsx)** : Même logique que CSV
-- **OFX** (Open Financial Exchange) : Format bancaire standard
-- **QIF** (Quicken Interchange Format) : Format legacy mais courant
+- **OFX / QFX** (Open Financial Exchange) : Format bancaire standard, parsing automatique via `ofxparse`
+- **XML bancaire** : Fichiers XML conformes au format OFX, détectés automatiquement
+- **QIF** (Quicken Interchange Format) : Format legacy mais courant *(prévu)*
+
+Les fichiers OFX/QFX/XML sont parsés sans configuration : les champs `date`, `amount`, `label` et `fitid` (identifiant unique de transaction) sont extraits automatiquement. Le `fitid` est utilisé en priorité pour la déduplication lorsqu'il est disponible.
 
 **Processus d'import**
-1. Upload du fichier
-2. Détection automatique du format
-3. Prévisualisation des premières lignes
+1. Upload du fichier (drag & drop ou sélection)
+2. Détection automatique du format par extension (`.csv`, `.xlsx`, `.ofx`, `.qfx`, `.xml`)
+3. Prévisualisation des premières lignes (CSV/Excel) ou import direct (OFX/XML)
 4. Mapping des colonnes (si CSV/Excel) ou validation (si OFX/QIF)
-5. Détection des doublons (basée sur hash : date + montant + libellé)
+5. Détection des doublons (basée sur `fitid` si disponible, sinon hash : date + montant + libellé)
 6. Import avec rapport : X importées, Y doublons ignorés, Z erreurs
 7. Lancement de la classification IA en arrière-plan
 

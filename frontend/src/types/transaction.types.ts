@@ -56,6 +56,9 @@ export interface PaginatedTransactions {
     page: number;
     per_page: number;
     pages: number;
+    total_income: number;
+    total_expenses: number;
+    total_net: number;
   };
 }
 
@@ -65,4 +68,21 @@ export interface ImportResult {
   duplicate_count: number;
   error_count: number;
   errors: string[] | null;
+}
+
+export interface CashflowMonthly {
+  month: string;       // "2026-01"
+  income: number;
+  expenses: number;
+  net: number;
+  count: number;
+}
+
+export interface CashflowDaily {
+  date: string;        // "2026-01-15"
+  net: number;
+  income: number;
+  expenses: number;
+  cumulative: number;
+  count: number;
 }

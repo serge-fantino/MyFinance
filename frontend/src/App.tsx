@@ -1,46 +1,70 @@
 import { Routes, Route, Navigate } from "react-router-dom";
-
-// Pages - will be implemented progressively
-// import LoginPage from "./pages/auth/LoginPage";
-// import RegisterPage from "./pages/auth/RegisterPage";
-// import DashboardPage from "./pages/dashboard/DashboardPage";
-// import AccountsPage from "./pages/accounts/AccountsPage";
-// import TransactionsPage from "./pages/transactions/TransactionsPage";
-// import AnalyticsPage from "./pages/analytics/AnalyticsPage";
-// import AIChatPage from "./pages/ai-chat/AIChatPage";
-// import SettingsPage from "./pages/settings/SettingsPage";
+import { AuthGuard } from "./components/auth/AuthGuard";
+import { GuestGuard } from "./components/auth/GuestGuard";
+import { AppLayout } from "./components/layout/AppLayout";
+import LoginPage from "./pages/auth/LoginPage";
+import RegisterPage from "./pages/auth/RegisterPage";
+import DashboardPage from "./pages/dashboard/DashboardPage";
+import AccountsPage from "./pages/accounts/AccountsPage";
+import TransactionsPage from "./pages/transactions/TransactionsPage";
 
 function App() {
   return (
     <div className="min-h-screen bg-background">
       <Routes>
         {/* Public routes */}
-        {/* <Route path="/login" element={<LoginPage />} /> */}
-        {/* <Route path="/register" element={<RegisterPage />} /> */}
-
-        {/* Protected routes (will be wrapped in AuthGuard) */}
-        {/* <Route path="/dashboard" element={<DashboardPage />} /> */}
-        {/* <Route path="/accounts" element={<AccountsPage />} /> */}
-        {/* <Route path="/transactions" element={<TransactionsPage />} /> */}
-        {/* <Route path="/analytics" element={<AnalyticsPage />} /> */}
-        {/* <Route path="/ai-chat" element={<AIChatPage />} /> */}
-        {/* <Route path="/settings" element={<SettingsPage />} /> */}
-
-        {/* Placeholder while pages are not implemented */}
         <Route
-          path="*"
+          path="/login"
           element={
-            <div className="flex items-center justify-center min-h-screen">
-              <div className="text-center">
-                <h1 className="text-4xl font-bold text-primary mb-4">MyFinance</h1>
-                <p className="text-muted-foreground text-lg">
-                  Application en cours de developpement...
-                </p>
-              </div>
-            </div>
+            <GuestGuard>
+              <LoginPage />
+            </GuestGuard>
           }
         />
+        <Route
+          path="/register"
+          element={
+            <GuestGuard>
+              <RegisterPage />
+            </GuestGuard>
+          }
+        />
+
+        {/* Protected routes */}
+        <Route
+          element={
+            <AuthGuard>
+              <AppLayout />
+            </AuthGuard>
+          }
+        >
+          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/accounts" element={<AccountsPage />} />
+          <Route path="/transactions" element={<TransactionsPage />} />
+
+          {/* Placeholder pages */}
+          <Route path="/analytics" element={<PlaceholderPage title="Analyses" description="Les graphiques de cashflow et analyses par categorie arrivent bientot." />} />
+          <Route path="/ai-chat" element={<PlaceholderPage title="Assistant IA" description="L'assistant conversationnel IA arrive bientot." />} />
+          <Route path="/settings" element={<PlaceholderPage title="Parametres" description="La gestion du profil et des preferences arrive bientot." />} />
+        </Route>
+
+        {/* Default redirect */}
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
+    </div>
+  );
+}
+
+function PlaceholderPage({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-24">
+      <div className="rounded-full bg-primary/10 p-6 mb-6">
+        <svg className="h-12 w-12 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </div>
+      <h2 className="text-2xl font-bold mb-2">{title}</h2>
+      <p className="text-muted-foreground text-center max-w-md">{description}</p>
     </div>
   );
 }
