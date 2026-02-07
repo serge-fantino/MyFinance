@@ -1,6 +1,6 @@
 # MyFinance — Spécifications Fonctionnelles
 
-> Version 1.1 — Février 2026
+> Version 1.2 — Février 2026
 
 ---
 
@@ -36,12 +36,14 @@ Utilisateur
   ├── Gérer ses comptes bancaires (CRUD)
   ├── Importer des transactions (CSV, Excel, OFX, QIF)
   ├── Consulter ses transactions (liste, filtres, recherche)
+  ├── Classifier les transactions (manuellement ou via IA)
+  ├── Gérer les règles de classification
   ├── Voir le tableau de bord consolidé
   ├── Analyser les dépenses par catégorie
   ├── Visualiser le cashflow
   ├── Consulter les prévisions (forecast)
   ├── Poser des questions à l'assistant IA
-  └── Gérer les catégories de dépenses
+  └── Gérer les catégories de dépenses (paramètres)
 
 Administrateur
   ├── Gérer les utilisateurs
@@ -166,6 +168,12 @@ Les fichiers OFX/QFX/XML sont parsés sans configuration : les champs `date`, `a
 
 ### 3.5 Catégorisation
 
+#### 3.5.1 Catégories
+
+**Deux niveaux de catégories :**
+- **Catégories système** (`is_system=true`) : fournies par défaut, non supprimables, visibles par tous les utilisateurs
+- **Catégories utilisateur** (`user_id=X`) : créées par l'utilisateur, modifiables et supprimables
+
 **Catégories par défaut**
 ```
 Revenus
@@ -190,12 +198,48 @@ Transferts
   └── Virement entre comptes
 ```
 
-**Classification IA**
-- À l'import, chaque transaction non catégorisée est envoyée au modèle IA
-- Le modèle utilise le libellé + le montant + l'historique de classification de l'utilisateur
-- Confiance affichée (haute / moyenne / basse)
-- L'utilisateur peut corriger → la correction enrichit le modèle (feedback loop)
-- Catégories personnalisables par l'utilisateur
+**Gestion des catégories (Paramètres)**
+- Page dédiée dans les paramètres pour voir, créer, modifier, supprimer les catégories
+- Vue arborescente : les catégories système sont affichées en lecture seule, les catégories utilisateur sont éditables
+- Création de sous-catégories rattachées à un parent
+- Chaque catégorie a un nom, une icône optionnelle et une couleur optionnelle
+
+#### 3.5.2 Règles de classification
+
+Le système utilise un moteur de **règles explicites** pour classifier automatiquement les transactions. Les règles peuvent être créées manuellement par l'utilisateur ou générées par l'IA.
+
+**Règle de classification** (entité)
+- **Pattern** : le motif de correspondance (texte extrait du libellé bancaire)
+- **Type de correspondance** (`match_type`) : `contains` (le libellé contient le pattern), `exact` (correspondance exacte), `starts_with`
+- **Catégorie cible** (`category_id`) : la catégorie à assigner automatiquement
+- **Libellé personnalisé** (`custom_label`) : un libellé clair défini par l'utilisateur (ex: "Salaire Serge", "Loyer appartement", "Abonnement Netflix"). Ce libellé est stocké dans `label_clean` de la transaction et sert de contexte supplémentaire pour l'IA.
+- **Priorité** : ordre d'évaluation (les règles de priorité haute sont évaluées en premier)
+- **Statut** : active / inactive
+- **Origine** : `manual` (créée par l'utilisateur) ou `ai` (suggérée par l'IA)
+- **Propriétaire** : chaque règle appartient à un utilisateur
+
+**Moteur de classification — Ordre d'exécution :**
+1. **Règles utilisateur** : pour chaque transaction non classée, le moteur cherche la première règle active dont le pattern correspond au libellé (`label_raw`). Si trouvée : assigne la catégorie + le libellé personnalisé.
+2. **Classification IA** (OpenAI) : les transactions restantes non classées sont envoyées en batch à l'IA. L'IA reçoit comme contexte la liste des catégories ET les règles existantes de l'utilisateur. Confiance affichée (haute / moyenne / basse).
+3. **IA → Suggestions de règles** : l'IA peut suggérer de nouvelles règles basées sur les patterns récurrents qu'elle détecte.
+
+**Création automatique de règles :**
+- Quand un utilisateur assigne manuellement une catégorie à une transaction, le système **crée automatiquement une règle** de type `contains` basée sur le libellé de la transaction.
+- L'utilisateur peut fournir un **libellé personnalisé** au même moment.
+- Après création de la règle, le système **applique immédiatement** cette règle à toutes les transactions non classées ayant un libellé similaire, et la liste est rafraîchie.
+
+**Gestion des règles**
+- Page/section dédiée dans les paramètres pour lister, modifier, supprimer les règles
+- Chaque règle affiche : pattern, catégorie, libellé personnalisé, nombre de transactions matchées
+- Possibilité de tester une règle avant de l'enregistrer
+
+#### 3.5.3 Classification IA
+
+- À l'import, les transactions sont d'abord classées par le moteur de règles, puis les restantes sont envoyées à l'IA
+- Le modèle (OpenAI GPT-4o) utilise le libellé + le montant + les règles existantes + les corrections récentes comme contexte
+- Confiance affichée : badge coloré (vert = high, orange = medium, rouge = low)
+- L'utilisateur peut corriger une classification IA → cela crée/met à jour une règle (feedback loop durable)
+- Les catégories personnalisables sont incluses dans le prompt
 
 ### 3.6 Tableau de bord
 

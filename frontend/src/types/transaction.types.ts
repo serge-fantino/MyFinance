@@ -35,6 +35,7 @@ export interface TransactionUpdate {
   notes?: string;
   tags?: string[];
   label_clean?: string;
+  custom_label?: string;
 }
 
 export interface TransactionFilter {
@@ -68,6 +69,14 @@ export interface ImportResult {
   duplicate_count: number;
   error_count: number;
   errors: string[] | null;
+  ai_classified?: number;
+}
+
+export interface ClassifyResult {
+  classified: number;
+  failed: number;
+  skipped: number;
+  total: number;
 }
 
 export interface CashflowMonthly {

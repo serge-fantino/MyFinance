@@ -67,6 +67,9 @@ export default function TransactionsPage() {
     search: "",
   });
 
+  // AI classify
+  const [classifying, setClassifying] = useState(false);
+
   // Debounced search
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -199,6 +202,81 @@ export default function TransactionsPage() {
     [fetchTransactions, fetchCashflow]
   );
 
+  const handleClassify = useCallback(async () => {
+    try {
+      setClassifying(true);
+      const accountIdParam = filters.accountId ? parseInt(filters.accountId) : undefined;
+      const result = await transactionService.classify(accountIdParam);
+      if (result.classified > 0) {
+        // Refresh data to show new categories
+        fetchTransactions();
+      }
+      setError(
+        result.classified > 0
+          ? null
+          : result.total === 0
+          ? "Aucune transaction à classifier."
+          : null
+      );
+    } catch {
+      setError("Erreur lors de la classification IA. Vérifiez la clé OpenAI.");
+    } finally {
+      setClassifying(false);
+    }
+  }, [filters.accountId, fetchTransactions]);
+
+  // Build flat category list for the dropdown (must be before handleCategoryChange)
+  const flatCategories = useMemo(() => {
+    const flat: { id: number; name: string; parentName: string | null; depth: number }[] = [];
+    const walk = (cats: Category[], depth: number) => {
+      for (const cat of cats) {
+        const parentName = depth === 0 ? null : cat.name;
+        flat.push({ id: cat.id, name: cat.name, parentName, depth });
+        if (cat.children?.length) walk(cat.children, depth + 1);
+      }
+    };
+    walk(categories, 0);
+    return flat;
+  }, [categories]);
+
+  const handleCategoryChange = useCallback(
+    async (txnId: number, categoryId: number | null, customLabel?: string) => {
+      try {
+        const result = await transactionService.update(txnId, {
+          category_id: categoryId ?? undefined,
+          custom_label: customLabel,
+        });
+        // If a rule was applied to other transactions, do a full refresh
+        if (result.rule_applied_count && result.rule_applied_count > 0) {
+          fetchTransactions();
+          fetchCashflow();
+        } else {
+          // Just update locally
+          setData((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              data: prev.data.map((t) => {
+                if (t.id !== txnId) return t;
+                const cat = flatCategories.find((c) => c.id === categoryId);
+                return {
+                  ...t,
+                  category_id: categoryId,
+                  category_name: cat?.name ?? null,
+                  label_clean: customLabel || t.label_clean,
+                  ai_confidence: "user",
+                };
+              }),
+            };
+          });
+        }
+      } catch {
+        setError("Erreur lors de la mise à jour de la catégorie.");
+      }
+    },
+    [flatCategories, fetchTransactions, fetchCashflow]
+  );
+
   const accountMap = useMemo(
     () => Object.fromEntries(accounts.map((a) => [a.id, a])),
     [accounts]
@@ -211,17 +289,37 @@ export default function TransactionsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Transactions</h1>
         </div>
-        <Button onClick={() => setImportOpen(true)}>
-          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-            />
-          </svg>
-          Importer
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={handleClassify} disabled={classifying}>
+            {classifying ? (
+              <>
+                <svg className="w-4 h-4 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Classification...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+                Classifier (IA)
+              </>
+            )}
+          </Button>
+          <Button onClick={() => setImportOpen(true)}>
+            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+              />
+            </svg>
+            Importer
+          </Button>
+        </div>
       </div>
 
       {error && <Alert variant="destructive">{error}</Alert>}
@@ -305,6 +403,8 @@ export default function TransactionsPage() {
                     txn={txn}
                     accountName={accountMap[txn.account_id]?.name}
                     colWidths={colWidths}
+                    flatCategories={flatCategories}
+                    onCategoryChange={handleCategoryChange}
                   />
                 ))
               )}
@@ -437,16 +537,63 @@ function ResizableHeader({
 // Transaction row
 // ---------------------------------------------------------------------------
 
+const CONFIDENCE_BADGE: Record<string, { label: string; className: string }> = {
+  high: { label: "IA", className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400" },
+  medium: { label: "IA", className: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400" },
+  low: { label: "IA?", className: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" },
+  user: { label: "", className: "" },
+};
+
 function TransactionRow({
   txn,
   accountName,
   colWidths,
+  flatCategories,
+  onCategoryChange,
 }: {
   txn: Transaction;
   accountName?: string;
   colWidths: number[];
+  flatCategories: { id: number; name: string; parentName: string | null; depth: number }[];
+  onCategoryChange: (txnId: number, categoryId: number | null, customLabel?: string) => void;
 }) {
   const isCredit = txn.amount >= 0;
+  const [editing, setEditing] = useState(false);
+  const [pendingCatId, setPendingCatId] = useState<number | null>(null);
+  const [customLabel, setCustomLabel] = useState("");
+
+  const confidence = txn.ai_confidence && txn.ai_confidence !== "user" && txn.ai_confidence !== "rule"
+    ? CONFIDENCE_BADGE[txn.ai_confidence]
+    : null;
+
+  const ruleConfidence = txn.ai_confidence === "rule"
+    ? { label: "R", className: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400" }
+    : null;
+
+  const handleCatSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = e.target.value ? parseInt(e.target.value) : null;
+    if (val) {
+      setPendingCatId(val);
+    } else {
+      onCategoryChange(txn.id, null);
+      setEditing(false);
+    }
+  };
+
+  const handleConfirmCategory = () => {
+    if (pendingCatId) {
+      onCategoryChange(txn.id, pendingCatId, customLabel || undefined);
+    }
+    setEditing(false);
+    setPendingCatId(null);
+    setCustomLabel("");
+  };
+
+  const handleCancelEdit = () => {
+    setEditing(false);
+    setPendingCatId(null);
+    setCustomLabel("");
+  };
 
   return (
     <tr className="border-b last:border-0 hover:bg-muted/30 transition-colors group">
@@ -459,6 +606,9 @@ function TransactionRow({
         <p className="text-sm font-medium break-words whitespace-pre-wrap leading-snug">
           {txn.label_clean || txn.label_raw}
         </p>
+        {txn.label_clean && txn.label_clean !== txn.label_raw && (
+          <p className="text-xs text-muted-foreground mt-0.5 break-words">{txn.label_raw}</p>
+        )}
         {txn.notes && (
           <p className="text-xs text-muted-foreground mt-0.5 break-words">{txn.notes}</p>
         )}
@@ -467,14 +617,77 @@ function TransactionRow({
       <td className="p-2 text-sm text-muted-foreground truncate" style={{ width: colWidths[2] }}>
         {accountName || "-"}
       </td>
-      {/* Category */}
+      {/* Category — inline editable */}
       <td className="p-2 text-sm" style={{ width: colWidths[3] }}>
-        {txn.category_name ? (
-          <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary">
-            {txn.category_name}
-          </span>
+        {editing ? (
+          <div className="space-y-1">
+            <select
+              autoFocus
+              className="w-full rounded border border-input bg-background px-1.5 py-0.5 text-xs"
+              value={pendingCatId ?? txn.category_id ?? ""}
+              onChange={handleCatSelect}
+            >
+              <option value="">— Aucune —</option>
+              {flatCategories.map((cat) => (
+                <option key={cat.id} value={cat.id}>
+                  {cat.depth > 0 ? "\u00A0\u00A0".repeat(cat.depth) : ""}
+                  {cat.name}
+                </option>
+              ))}
+            </select>
+            {pendingCatId && (
+              <>
+                <input
+                  type="text"
+                  placeholder="Libellé (ex: Salaire Serge)"
+                  value={customLabel}
+                  onChange={(e) => setCustomLabel(e.target.value)}
+                  className="w-full rounded border border-input bg-background px-1.5 py-0.5 text-xs"
+                  onKeyDown={(e) => e.key === "Enter" && handleConfirmCategory()}
+                />
+                <div className="flex gap-1">
+                  <button
+                    onClick={handleConfirmCategory}
+                    className="flex-1 rounded bg-primary px-1.5 py-0.5 text-[10px] text-primary-foreground hover:bg-primary/90"
+                  >
+                    OK
+                  </button>
+                  <button
+                    onClick={handleCancelEdit}
+                    className="flex-1 rounded border px-1.5 py-0.5 text-[10px] hover:bg-muted"
+                  >
+                    Annuler
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         ) : (
-          <span className="text-muted-foreground text-xs">—</span>
+          <span
+            className="inline-flex items-center gap-1 cursor-pointer group/cat"
+            onClick={() => setEditing(true)}
+            title="Cliquer pour changer la catégorie"
+          >
+            {txn.category_name ? (
+              <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors">
+                {txn.category_name}
+              </span>
+            ) : (
+              <span className="text-muted-foreground text-xs hover:text-foreground transition-colors">
+                + catégorie
+              </span>
+            )}
+            {confidence && (
+              <span className={`inline-flex items-center rounded px-1 py-0 text-[10px] font-medium ${confidence.className}`}>
+                {confidence.label}
+              </span>
+            )}
+            {ruleConfidence && (
+              <span className={`inline-flex items-center rounded px-1 py-0 text-[10px] font-medium ${ruleConfidence.className}`}>
+                {ruleConfidence.label}
+              </span>
+            )}
+          </span>
         )}
       </td>
       {/* Amount */}

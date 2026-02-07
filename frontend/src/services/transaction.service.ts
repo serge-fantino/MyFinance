@@ -5,6 +5,7 @@ import api from "./api";
 import type {
   CashflowDaily,
   CashflowMonthly,
+  ClassifyResult,
   ImportResult,
   PaginatedTransactions,
   Transaction,
@@ -57,6 +58,13 @@ export const transactionService = {
     formData.append("file", file);
     const response = await api.post(`/transactions/import?account_id=${accountId}`, formData, {
       headers: { "Content-Type": "multipart/form-data" },
+    });
+    return response.data;
+  },
+
+  async classify(accountId?: number): Promise<ClassifyResult> {
+    const response = await api.post("/transactions/classify", null, {
+      params: accountId ? { account_id: accountId } : {},
     });
     return response.data;
   },

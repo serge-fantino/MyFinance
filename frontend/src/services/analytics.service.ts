@@ -2,37 +2,58 @@
  * Analytics API service.
  */
 import api from "./api";
-import type {
-  BalanceHistoryResponse,
-  CashflowResponse,
-  CategoryBreakdownResponse,
-  ForecastResponse,
-} from "../types/analytics.types";
+
+export interface CategoryBreakdown {
+  category_id: number;
+  category_name: string;
+  parent_id: number | null;
+  parent_name: string | null;
+  total: number;
+  count: number;
+  percentage: number;
+}
+
+export interface AnalyticsFilters {
+  account_id?: number;
+  date_from?: string;
+  date_to?: string;
+  direction?: "income" | "expense";
+}
+
+export interface LabelGroup {
+  label: string;
+  total: number;
+  count: number;
+  transactions: LabelTransaction[];
+}
+
+export interface LabelTransaction {
+  id: number;
+  date: string;
+  label_raw: string;
+  label_clean: string | null;
+  amount: number;
+  currency: string;
+  category_id: number | null;
+  ai_confidence: string | null;
+}
 
 export const analyticsService = {
-  async getCashflow(months = 12, accountId?: number): Promise<CashflowResponse> {
-    const response = await api.get("/analytics/cashflow", {
-      params: { months, account_id: accountId },
-    });
+  async byCategory(filters: AnalyticsFilters = {}): Promise<CategoryBreakdown[]> {
+    const response = await api.get("/analytics/by-category", { params: filters });
     return response.data;
   },
 
-  async getByCategory(dateFrom?: string, dateTo?: string, accountId?: number): Promise<CategoryBreakdownResponse> {
-    const response = await api.get("/analytics/by-category", {
-      params: { date_from: dateFrom, date_to: dateTo, account_id: accountId },
-    });
-    return response.data;
-  },
-
-  async getBalanceHistory(months = 12, accountId?: number): Promise<BalanceHistoryResponse> {
-    const response = await api.get("/analytics/balance-history", {
-      params: { months, account_id: accountId },
-    });
-    return response.data;
-  },
-
-  async getForecast(months = 3): Promise<ForecastResponse> {
-    const response = await api.get("/analytics/forecast", { params: { months } });
+  async categoryDetail(
+    categoryId: number | null,
+    filters: AnalyticsFilters = {},
+  ): Promise<LabelGroup[]> {
+    const params: Record<string, any> = { ...filters };
+    if (categoryId !== null) {
+      params.category_id = categoryId;
+    }
+    // For uncategorized: don't send category_id param at all (backend defaults to None)
+    const response = await api.get("/analytics/category-detail", { params });
     return response.data;
   },
 };

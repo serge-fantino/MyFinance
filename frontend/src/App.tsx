@@ -7,6 +7,8 @@ import RegisterPage from "./pages/auth/RegisterPage";
 import DashboardPage from "./pages/dashboard/DashboardPage";
 import AccountsPage from "./pages/accounts/AccountsPage";
 import TransactionsPage from "./pages/transactions/TransactionsPage";
+import SettingsPage from "./pages/settings/SettingsPage";
+import AnalyticsPage from "./pages/analytics/AnalyticsPage";
 
 function App() {
   return (
@@ -43,9 +45,9 @@ function App() {
           <Route path="/transactions" element={<TransactionsPage />} />
 
           {/* Placeholder pages */}
-          <Route path="/analytics" element={<PlaceholderPage title="Analyses" description="Les graphiques de cashflow et analyses par categorie arrivent bientot." />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/ai-chat" element={<PlaceholderPage title="Assistant IA" description="L'assistant conversationnel IA arrive bientot." />} />
-          <Route path="/settings" element={<PlaceholderPage title="Parametres" description="La gestion du profil et des preferences arrive bientot." />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
 
         {/* Default redirect */}
