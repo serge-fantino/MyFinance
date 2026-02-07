@@ -274,16 +274,82 @@ class TransactionService:
         return await self._get_user_transaction(transaction_id, user)
 
     async def update_transaction(
-        self, transaction_id: int, data: TransactionUpdate, user: User
-    ) -> Transaction:
-        """Update a transaction (category, notes, tags)."""
+        self,
+        transaction_id: int,
+        data: TransactionUpdate,
+        user: User,
+    ) -> dict:
+        """Update a transaction (category, notes, tags).
+
+        When the user manually sets a category_id, we:
+        1. Mark ai_confidence as "user"
+        2. Create a classification rule for the label → category mapping
+        3. Apply the rule to all other matching uncategorized transactions
+
+        Returns a dict with the updated transaction + count of additionally
+        classified transactions (via the new rule).
+        """
+        from app.services.rule_service import RuleService
+
         txn = await self._get_user_transaction(transaction_id, user)
         update_data = data.model_dump(exclude_unset=True)
+
+        # Extract custom_label before applying to transaction fields
+        custom_label = update_data.pop("custom_label", None)
+
+        rule_applied_count = 0
+
+        # Handle manual category assignment → create rule + apply
+        if "category_id" in update_data and update_data["category_id"] is not None:
+            txn.ai_confidence = "user"
+
+            # Create/update a classification rule
+            rule_service = RuleService(self.db)
+            rule = await rule_service.create_rule_from_transaction(
+                user=user,
+                label_raw=txn.label_raw,
+                category_id=update_data["category_id"],
+                custom_label=custom_label,
+            )
+
+            # If custom_label was provided, also set it on this transaction
+            if custom_label:
+                txn.label_clean = custom_label
+
+            # Apply the new rule to other matching uncategorized transactions
+            rule_applied_count = await rule_service.apply_single_rule(rule, user)
+
         for key, value in update_data.items():
             setattr(txn, key, value)
         await self.db.flush()
         await self.db.refresh(txn)
-        return txn
+
+        # Build enriched response
+        cat_name = None
+        if txn.category_id:
+            cat = await self.db.get(Category, txn.category_id)
+            if cat:
+                cat_name = cat.name
+
+        return {
+            "id": txn.id,
+            "account_id": txn.account_id,
+            "date": txn.date,
+            "value_date": txn.value_date,
+            "label_raw": txn.label_raw,
+            "label_clean": txn.label_clean,
+            "amount": txn.amount,
+            "currency": txn.currency,
+            "category_id": txn.category_id,
+            "category_name": cat_name,
+            "subcategory": txn.subcategory,
+            "notes": txn.notes,
+            "tags": txn.tags,
+            "source": txn.source,
+            "ai_confidence": txn.ai_confidence,
+            "created_at": txn.created_at,
+            "rule_applied_count": rule_applied_count,
+        }
 
     async def delete_transaction(self, transaction_id: int, user: User) -> None:
         """Soft-delete a transaction."""

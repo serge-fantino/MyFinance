@@ -141,14 +141,30 @@
        │color     │    ├──────────────────┤
        │is_system │    │ id (PK)          │        ┌──────────────────┐
        │created_at│    │ user_id (FK)     │        │    messages      │
-       └──────────┘    │ title            │        ├──────────────────┤
-                       │ created_at       │        │ id (PK)          │
-                       │ updated_at       │        │ conversation_id  │
-                       └──────────────────┘───────▶│ role             │
-                                                   │ content          │
-       ┌──────────────────┐                        │ metadata         │
-       │  import_logs     │                        │ created_at       │
-       ├──────────────────┤                        └──────────────────┘
+       └─────┬────┘    │ title            │        ├──────────────────┤
+             │         │ created_at       │        │ id (PK)          │
+             │         │ updated_at       │        │ conversation_id  │
+             │         └──────────────────┘───────▶│ role             │
+             │                                     │ content          │
+             │    ┌──────────────────────┐         │ metadata         │
+             │    │classification_rules  │         │ created_at       │
+             │    ├──────────────────────┤         └──────────────────┘
+             └───▶│ id (PK)             │
+                  │ user_id (FK)        │
+                  │ pattern             │  ← texte de correspondance
+                  │ match_type          │  ← contains | exact | starts_with
+                  │ category_id (FK)    │
+                  │ custom_label        │  ← libellé personnalisé ("Salaire Serge")
+                  │ priority            │  ← ordre d'évaluation
+                  │ is_active           │
+                  │ created_by          │  ← manual | ai
+                  │ created_at          │
+                  │ updated_at          │
+                  └──────────────────────┘
+
+       ┌──────────────────┐
+       │  import_logs     │
+       ├──────────────────┤
        │ id (PK)          │
        │ user_id (FK)     │
        │ account_id (FK)  │
@@ -178,6 +194,9 @@ CREATE UNIQUE INDEX idx_transactions_dedup ON transactions(dedup_hash) WHERE del
 
 -- Catégories par utilisateur
 CREATE INDEX idx_categories_user ON categories(user_id);
+
+-- Règles de classification par utilisateur
+CREATE INDEX idx_classification_rules_user ON classification_rules(user_id, is_active);
 ```
 
 ---
@@ -206,21 +225,31 @@ CREATE INDEX idx_categories_user ON categories(user_id);
 │   ├── GET    /:id               # Détail d'un compte
 │   ├── PATCH  /:id               # Modifier un compte
 │   ├── DELETE /:id               # Archiver un compte
+│   ├── POST   /:id/calibrate     # Calibrer le solde
 │   └── GET    /summary           # Vue consolidée
 │
 ├── /transactions
 │   ├── GET    /                  # Liste (paginée, filtrable)
 │   ├── POST   /                  # Créer manuellement
+│   ├── GET    /cashflow          # Données cashflow (mensuel/journalier)
+│   ├── POST   /classify          # Classifier (IA) les transactions non classées
 │   ├── GET    /:id               # Détail
-│   ├── PATCH  /:id               # Modifier
+│   ├── PATCH  /:id               # Modifier (+ crée une règle si catégorie changée)
 │   ├── DELETE /:id               # Supprimer
-│   └── POST   /import            # Import fichier
+│   └── POST   /import            # Import fichier (+ auto-classify)
 │
 ├── /categories
-│   ├── GET    /                  # Liste des catégories
-│   ├── POST   /                  # Créer une catégorie
-│   ├── PATCH  /:id               # Modifier
-│   └── DELETE /:id               # Supprimer
+│   ├── GET    /                  # Liste des catégories (arbre)
+│   ├── POST   /                  # Créer une catégorie utilisateur
+│   ├── PATCH  /:id               # Modifier (utilisateur uniquement)
+│   └── DELETE /:id               # Supprimer (utilisateur uniquement)
+│
+├── /classification-rules
+│   ├── GET    /                  # Liste des règles de l'utilisateur
+│   ├── POST   /                  # Créer une règle
+│   ├── PATCH  /:id               # Modifier une règle
+│   ├── DELETE /:id               # Supprimer une règle
+│   └── POST   /apply             # Appliquer toutes les règles actives aux transactions non classées
 │
 ├── /analytics
 │   ├── GET    /cashflow          # Données cashflow

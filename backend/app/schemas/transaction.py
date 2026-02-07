@@ -24,25 +24,27 @@ class TransactionUpdate(BaseModel):
     notes: str | None = None
     tags: list[str] | None = None
     label_clean: str | None = None
+    custom_label: str | None = None  # Creates/updates a classification rule with this label
 
 
 class TransactionResponse(BaseModel):
     id: int
     account_id: int
     date: date
-    value_date: date | None
+    value_date: date | None = None
     label_raw: str
-    label_clean: str | None
+    label_clean: str | None = None
     amount: Decimal
     currency: str
-    category_id: int | None
+    category_id: int | None = None
     category_name: str | None = None
-    subcategory: str | None
-    notes: str | None
-    tags: list[str] | None
+    subcategory: str | None = None
+    notes: str | None = None
+    tags: list[str] | None = None
     source: str
-    ai_confidence: str | None
+    ai_confidence: str | None = None
     created_at: datetime
+    rule_applied_count: int | None = None  # Only set after a category update
 
     model_config = {"from_attributes": True}
 
@@ -68,3 +70,12 @@ class ImportResult(BaseModel):
     duplicate_count: int
     error_count: int
     errors: list[str] | None = None
+    ai_classified: int | None = None
+
+
+class ClassifyResult(BaseModel):
+    """Result of AI classification."""
+    classified: int
+    failed: int
+    skipped: int
+    total: int

@@ -87,36 +87,44 @@
 
 ### Epic 6 : Catégorisation
 
-| # | Ticket | Priorité | Taille | Description |
-|---|--------|----------|--------|-------------|
-| 6.1 | Modèle Category + migration | P0 | S | Catégories hiérarchiques (parent_id), système + custom user |
-| 6.2 | Seed catégories par défaut | P0 | S | Script pour insérer l'arbre de catégories par défaut |
-| 6.3 | API CRUD catégories | P0 | M | GET/POST/PATCH/DELETE /categories |
-| 6.4 | UI gestion catégories | P1 | M | Page settings avec arbre de catégories, ajout/modif/suppression |
-| 6.5 | Assignation manuelle catégorie | P0 | S | Dropdown de catégorie dans la liste des transactions |
+| # | Ticket | Priorité | Taille | Statut | Description |
+|---|--------|----------|--------|--------|-------------|
+| 6.1 | Modèle Category + migration | P0 | S | ✅ Done | Catégories hiérarchiques (parent_id), système + custom user |
+| 6.2 | Seed catégories par défaut | P0 | S | ✅ Done | Arbre de 3 racines + 15 sous-catégories inséré dans migration 002 |
+| 6.3 | API CRUD catégories | P0 | M | ✅ Done | GET/POST/PATCH/DELETE /categories (protection système) |
+| 6.4 | UI gestion catégories | P0 | M | ✅ Done | Page paramètres avec arbre de catégories, ajout/modif/suppression. Catégories système en lecture seule. |
+| 6.5 | Assignation manuelle catégorie | P0 | S | ✅ Done | Dropdown inline dans la liste des transactions, marque `ai_confidence=user` |
 
-### Epic 7 : Classification IA
+### Epic 7 : Classification IA & Moteur de règles
 
-| # | Ticket | Priorité | Taille | Description |
-|---|--------|----------|--------|-------------|
-| 7.1 | Service IA classification | P0 | L | Appel OpenAI pour classifier une transaction (libellé → catégorie) |
-| 7.2 | Classification batch à l'import | P0 | M | Après import, lancer la classification async sur les nouvelles transactions |
-| 7.3 | Feedback loop | P1 | M | Quand l'utilisateur corrige une catégorie, enrichir le contexte IA |
-| 7.4 | Affichage confiance IA | P1 | S | Badge de confiance (haute/moyenne/basse) sur les catégories IA |
+| # | Ticket | Priorité | Taille | Statut | Description |
+|---|--------|----------|--------|--------|-------------|
+| 7.1 | Service IA classification | P0 | L | ✅ Done | `AIClassificationService` : batch OpenAI avec prompt structuré, catégories, few-shot examples |
+| 7.2 | Classification batch à l'import | P0 | M | ✅ Done | Auto-classification après import via `POST /transactions/import` |
+| 7.3 | Feedback loop | P1 | M | ✅ Done | Corrections manuelles (`ai_confidence=user`) servent d'exemples few-shot pour les prochaines classifications |
+| 7.4 | Affichage confiance IA | P1 | S | ✅ Done | Badge coloré (vert=high, orange=medium, rouge=low) à côté de la catégorie |
+| 7.5 | Modèle ClassificationRule + migration | P0 | S | ✅ Done | Table `classification_rules` : pattern, match_type, category_id, custom_label, priority, is_active, created_by |
+| 7.6 | Service moteur de règles | P0 | L | ✅ Done | `RuleService.apply_rules()` : évaluer les règles par priorité, assigner catégorie + label_clean |
+| 7.7 | API CRUD règles | P0 | M | ✅ Done | GET/POST/PATCH/DELETE /classification-rules + POST /apply |
+| 7.8 | Création auto de règle | P0 | M | ✅ Done | PATCH /transactions/{id} avec category_id → crée une règle `contains` + applique à toutes les transactions similaires |
+| 7.9 | Libellé personnalisé sur règle | P0 | S | ✅ Done | Champ `custom_label` sur la règle, copié dans `label_clean` de la transaction lors de l'application |
+| 7.10 | UI gestion des règles | P1 | M | ✅ Done | Onglet dans paramètres : liste des règles, édition pattern/catégorie/label, activation/désactivation |
+| 7.11 | Intégration règles → prompt IA | P1 | S | ✅ Done | Les règles de l'utilisateur sont injectées dans le prompt OpenAI comme contexte additionnel |
+| 7.12 | Rafraîchissement liste après classif. | P0 | S | ✅ Done | Après assignation manuelle + application de la règle, la liste se rafraîchit automatiquement |
 
 ### Epic 8 : Dashboard
 
-| # | Ticket | Priorité | Taille | Description |
-|---|--------|----------|--------|-------------|
-| 8.1 | API cashflow | P0 | M | GET /analytics/cashflow → revenus/dépenses par mois |
-| 8.2 | API répartition catégories | P0 | M | GET /analytics/by-category → montants par catégorie |
-| 8.3 | API historique solde | P0 | M | GET /analytics/balance-history → évolution du solde |
-| 8.4 | Widget solde global | P0 | S | Card avec le solde total et par compte |
-| 8.5 | Graphique cashflow | P0 | M | Bar chart revenus vs dépenses (Recharts) |
-| 8.6 | Graphique catégories | P0 | M | Donut/pie chart répartition dépenses |
-| 8.7 | Graphique évolution solde | P0 | M | Line chart sur 12 mois |
-| 8.8 | Dernières transactions | P1 | S | Liste des 10 dernières sur le dashboard |
-| 8.9 | Filtres période/compte | P0 | M | Sélecteur de période et de compte(s) global au dashboard |
+| # | Ticket | Priorité | Taille | Statut | Description |
+|---|--------|----------|--------|--------|-------------|
+| 8.1 | API cashflow | P0 | M | ✅ Done | GET /transactions/cashflow (mensuel + journalier avec cumul) |
+| 8.2 | API répartition catégories | P0 | M | ✅ Done | GET /analytics/by-category → montants par catégorie (filtres compte, date, direction) |
+| 8.3 | API historique solde | P0 | M | ✅ Done | Intégré dans cashflow journalier (cumul depuis initial_balance) |
+| 8.4 | Widget solde global | P0 | S | ✅ Done | Card solde total sur page Comptes + KPIs sur Transactions |
+| 8.5 | Graphique cashflow | P0 | M | ✅ Done | Bar chart + area chart avec gradient vert/rouge, brush interactif |
+| 8.6 | Graphique catégories | P0 | M | ✅ Done | Bar chart horizontal + Treemap répartition dépenses/revenus, tableau détaillé |
+| 8.7 | Graphique évolution solde | P0 | M | ✅ Done | Intégré dans cashflow journalier (courbe cumulative) |
+| 8.8 | Dernières transactions | P1 | S | 🔲 TODO | Liste des 10 dernières sur le dashboard |
+| 8.9 | Filtres période/compte | P0 | M | ✅ Done | Barre de filtres complète (compte, direction, catégorie, date, recherche) |
 
 ---
 
@@ -185,11 +193,11 @@
 ## Backlog futur (Post-MVP)
 
 ### Epic 14 : Import avancé
-| # | Ticket | Priorité | Taille | Description |
-|---|--------|----------|--------|-------------|
-| 14.1 | Parser OFX | P2 | M | Support format Open Financial Exchange |
-| 14.2 | Parser QIF | P2 | M | Support format Quicken Interchange |
-| 14.3 | Import récurrent programmé | P3 | L | Upload automatique depuis un dossier/email |
+| # | Ticket | Priorité | Taille | Statut | Description |
+|---|--------|----------|--------|--------|-------------|
+| 14.1 | Parser OFX | P2 | M | ✅ Done | Support OFX/QFX/XML via `ofxparse`, déduplication par FITID |
+| 14.2 | Parser QIF | P2 | M | 🔲 TODO | Support format Quicken Interchange |
+| 14.3 | Import récurrent programmé | P3 | L | 🔲 TODO | Upload automatique depuis un dossier/email |
 
 ### Epic 15 : Fonctionnalités avancées
 | # | Ticket | Priorité | Taille | Description |

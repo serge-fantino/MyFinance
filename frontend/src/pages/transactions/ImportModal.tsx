@@ -67,18 +67,25 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                   <p className="text-2xl font-bold">{result.total_rows}</p>
                   <p className="text-xs text-muted-foreground">Lignes lues</p>
                 </div>
-                <div className="bg-emerald-50 rounded-lg p-3 text-center">
+                <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold text-emerald-600">{result.imported_count}</p>
                   <p className="text-xs text-muted-foreground">Importees</p>
                 </div>
-                <div className="bg-yellow-50 rounded-lg p-3 text-center">
+                <div className="bg-yellow-50 dark:bg-yellow-900/20 rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold text-yellow-600">{result.duplicate_count}</p>
                   <p className="text-xs text-muted-foreground">Doublons ignores</p>
                 </div>
-                <div className="bg-red-50 rounded-lg p-3 text-center">
-                  <p className="text-2xl font-bold text-red-600">{result.error_count}</p>
-                  <p className="text-xs text-muted-foreground">Erreurs</p>
-                </div>
+                {result.ai_classified != null && result.ai_classified > 0 ? (
+                  <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-center">
+                    <p className="text-2xl font-bold text-blue-600">{result.ai_classified}</p>
+                    <p className="text-xs text-muted-foreground">Classifiees (IA)</p>
+                  </div>
+                ) : (
+                  <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-3 text-center">
+                    <p className="text-2xl font-bold text-red-600">{result.error_count}</p>
+                    <p className="text-xs text-muted-foreground">Erreurs</p>
+                  </div>
+                )}
               </div>
               {result.errors && result.errors.length > 0 && (
                 <div className="text-sm">
