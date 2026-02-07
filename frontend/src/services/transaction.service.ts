@@ -3,6 +3,8 @@
  */
 import api from "./api";
 import type {
+  CashflowDaily,
+  CashflowMonthly,
   ImportResult,
   PaginatedTransactions,
   Transaction,
@@ -34,6 +36,20 @@ export const transactionService = {
 
   async delete(id: number): Promise<void> {
     await api.delete(`/transactions/${id}`);
+  },
+
+  async getCashflowMonthly(accountId?: number): Promise<CashflowMonthly[]> {
+    const response = await api.get("/transactions/cashflow", {
+      params: { granularity: "monthly", ...(accountId ? { account_id: accountId } : {}) },
+    });
+    return response.data;
+  },
+
+  async getCashflowDaily(accountId?: number): Promise<CashflowDaily[]> {
+    const response = await api.get("/transactions/cashflow", {
+      params: { granularity: "daily", ...(accountId ? { account_id: accountId } : {}) },
+    });
+    return response.data;
   },
 
   async import(accountId: number, file: File): Promise<ImportResult> {

@@ -1,14 +1,20 @@
 """Alembic migrations environment."""
 
 import asyncio
+import sys
 from logging.config import fileConfig
+from pathlib import Path
 
-from alembic import context
-from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+# Ensure the backend directory (parent of migrations/) is in sys.path
+# so that `from app.xxx import ...` works when alembic is invoked.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.config import settings
-from app.models import Base
+from alembic import context  # noqa: E402
+from sqlalchemy import pool  # noqa: E402
+from sqlalchemy.ext.asyncio import async_engine_from_config  # noqa: E402
+
+from app.config import settings  # noqa: E402
+from app.models import Base  # noqa: E402
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

@@ -12,21 +12,21 @@ from app.core.security import (
     verify_password,
 )
 from app.models.user import User
-from app.schemas.user import TokenResponse, UserLogin, UserRegister
+from app.schemas.user import AuthResponse, TokenResponse, UserLogin, UserRegister, UserResponse
 
 
 class AuthService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def register(self, data: UserRegister) -> User:
-        """Register a new user."""
+    async def register(self, data: UserRegister) -> AuthResponse:
+        """Register a new user and return tokens (auto-login)."""
         # Check if email already exists
         result = await self.db.execute(select(User).where(User.email == data.email))
         if result.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Email already registered",
+                detail="Un compte avec cet email existe déjà",
             )
 
         user = User(
@@ -37,10 +37,16 @@ class AuthService:
         self.db.add(user)
         await self.db.flush()
         await self.db.refresh(user)
-        return user
 
-    async def login(self, data: UserLogin) -> TokenResponse:
-        """Authenticate user and return tokens."""
+        # Auto-login: generate tokens immediately
+        return AuthResponse(
+            user=UserResponse.model_validate(user),
+            access_token=create_access_token(user.id),
+            refresh_token=create_refresh_token(user.id),
+        )
+
+    async def login(self, data: UserLogin) -> AuthResponse:
+        """Authenticate user and return user info + tokens."""
         result = await self.db.execute(
             select(User).where(User.email == data.email, User.is_active.is_(True))
         )
@@ -49,10 +55,11 @@ class AuthService:
         if not user or not verify_password(data.password, user.password_hash):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid email or password",
+                detail="Email ou mot de passe incorrect",
             )
 
-        return TokenResponse(
+        return AuthResponse(
+            user=UserResponse.model_validate(user),
             access_token=create_access_token(user.id),
             refresh_token=create_refresh_token(user.id),
         )

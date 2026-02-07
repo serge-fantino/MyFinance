@@ -1,6 +1,6 @@
 """Account schemas for request/response validation."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel
@@ -24,6 +24,12 @@ class AccountUpdate(BaseModel):
     status: str | None = None
 
 
+class CalibrateBalanceRequest(BaseModel):
+    """User provides a known balance at a specific date to calibrate the account."""
+    date: date
+    amount: Decimal
+
+
 class AccountResponse(BaseModel):
     id: int
     name: str
@@ -34,6 +40,8 @@ class AccountResponse(BaseModel):
     color: str | None
     status: str
     current_balance: Decimal | None = None
+    balance_reference_date: date | None = None
+    balance_reference_amount: Decimal | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

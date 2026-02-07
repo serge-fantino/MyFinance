@@ -18,7 +18,8 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     preferences: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
 
-    # Relationships
-    accounts = relationship("Account", back_populates="user", lazy="selectin")
-    categories = relationship("Category", back_populates="user", lazy="selectin")
-    conversations = relationship("Conversation", back_populates="user", lazy="selectin")
+    # Relationships (lazy="select" = default lazy loading, avoids loading
+    # related tables that may not exist yet during incremental migrations)
+    accounts = relationship("Account", back_populates="user", lazy="select")
+    categories = relationship("Category", back_populates="user", lazy="select")
+    conversations = relationship("Conversation", back_populates="user", lazy="select")

@@ -8,6 +8,8 @@ export interface Account {
   color: string | null;
   status: string;
   current_balance?: number;
+  balance_reference_date: string | null;
+  balance_reference_amount: number | null;
   created_at: string;
 }
 

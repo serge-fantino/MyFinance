@@ -33,4 +33,16 @@ export const accountService = {
     const response = await api.get("/accounts/summary");
     return response.data;
   },
+
+  async calibrate(
+    accountId: number,
+    date: string,
+    amount: number
+  ): Promise<Account> {
+    const response = await api.post(`/accounts/${accountId}/calibrate`, {
+      date,
+      amount,
+    });
+    return response.data;
+  },
 };

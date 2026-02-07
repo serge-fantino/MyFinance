@@ -2,22 +2,28 @@
  * Authentication API service.
  */
 import api from "./api";
-import type { LoginRequest, RegisterRequest, TokenResponse, User } from "../types/auth.types";
+import type { AuthResponse, LoginRequest, RegisterRequest, User } from "../types/auth.types";
+
+function storeTokens(authResponse: AuthResponse): void {
+  localStorage.setItem("access_token", authResponse.access_token);
+  localStorage.setItem("refresh_token", authResponse.refresh_token);
+  // Also set default header to avoid any edge-case where interceptor doesn't run
+  api.defaults.headers.common.Authorization = `Bearer ${authResponse.access_token}`;
+}
 
 export const authService = {
-  async register(data: RegisterRequest): Promise<User> {
+  async register(data: RegisterRequest): Promise<AuthResponse> {
     const response = await api.post("/auth/register", data);
-    return response.data;
+    const authData: AuthResponse = response.data;
+    storeTokens(authData);
+    return authData;
   },
 
-  async login(data: LoginRequest): Promise<TokenResponse> {
+  async login(data: LoginRequest): Promise<AuthResponse> {
     const response = await api.post("/auth/login", data);
-    const tokens = response.data;
-
-    localStorage.setItem("access_token", tokens.access_token);
-    localStorage.setItem("refresh_token", tokens.refresh_token);
-
-    return tokens;
+    const authData: AuthResponse = response.data;
+    storeTokens(authData);
+    return authData;
   },
 
   async getProfile(): Promise<User> {
@@ -28,6 +34,10 @@ export const authService = {
   logout(): void {
     localStorage.removeItem("access_token");
     localStorage.removeItem("refresh_token");
-    window.location.href = "/login";
+    delete api.defaults.headers.common.Authorization;
+  },
+
+  hasToken(): boolean {
+    return !!localStorage.getItem("access_token");
   },
 };
