@@ -1,0 +1,12 @@
+# ─────────────────────────────────────────────────────
+# Copier ce fichier en terraform.tfvars et remplir
+# ─────────────────────────────────────────────────────
+
+hcloud_token    = "your-hetzner-api-token"
+ssh_public_key  = "ssh-ed25519 AAAA... user@machine"
+ssh_allowed_ips = ["YOUR_IP/32"]
+domain          = "myfinance.yourdomain.com"
+location        = "fsn1"
+server_type     = "cx22"
+volume_size     = 20
+environment     = "production"
