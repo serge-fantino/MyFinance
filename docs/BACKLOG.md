@@ -112,6 +112,22 @@
 | 7.11 | Intégration règles → prompt IA | P1 | S | ✅ Done | Les règles de l'utilisateur sont injectées dans le prompt OpenAI comme contexte additionnel |
 | 7.12 | Rafraîchissement liste après classif. | P0 | S | ✅ Done | Après assignation manuelle + application de la règle, la liste se rafraîchit automatiquement |
 
+### Epic 7b : Classification par Embeddings (remplace l'IA OpenAI)
+
+> Voir [EMBEDDING_CLASSIFICATION.md](EMBEDDING_CLASSIFICATION.md) pour la stratégie détaillée.
+
+| # | Ticket | Priorité | Taille | Statut | Description |
+|---|--------|----------|--------|--------|-------------|
+| 7b.1 | Extension pgvector + migration | P0 | S | ✅ Done | Migration 005 : `CREATE EXTENSION vector`, colonne `embedding vector(384)` sur transactions, index HNSW |
+| 7b.2 | EmbeddingService | P0 | L | ✅ Done | Service `embedding_service.py` : calcul d'embeddings (sentence-transformers local), recherche par similarité, clustering HDBSCAN, suggestions catégorie |
+| 7b.3 | Embeddings des catégories | P0 | M | ✅ Done | Projection des noms de catégories dans l'espace d'embeddings pour suggestion sémantique a priori |
+| 7b.4 | API clustering + classification | P0 | M | ✅ Done | `POST /compute-embeddings`, `GET /clusters`, `POST /clusters/classify` |
+| 7b.5 | Intégration import → embeddings | P0 | S | ✅ Done | Après import : règles → calcul embeddings. Suggestions disponibles via `/clusters` |
+| 7b.6 | Désactivation OpenAI | P0 | S | ✅ Done | Dépendances commentées, import pipeline sans appel API |
+| 7b.7 | Documentation stratégie | P0 | M | ✅ Done | `EMBEDDING_CLASSIFICATION.md` : architecture, algorithmes, seuils, pipeline |
+| 7b.8 | UI vue clusters | P1 | L | 🔲 TODO | Page de revue des clusters avec suggestions, accept/reject/modify par cluster |
+| 7b.9 | UI suggestions inline | P2 | M | 🔲 TODO | Badge suggestion sur chaque transaction non classée dans la liste |
+
 ### Epic 8 : Dashboard
 
 | # | Ticket | Priorité | Taille | Statut | Description |
@@ -219,6 +235,7 @@
 | 1 | 1-2 | Setup + Auth | 14 | Fondations, authentification |
 | 2 | 3-4 | Comptes + Transactions + Import | 17 | Données de base, import CSV/Excel |
 | 3 | 5-6 | Catégorisation + Dashboard | 14 | Classification IA, visualisations |
+| 3b | — | Embeddings (remplace OpenAI) | 9 | Classification locale par embeddings, clustering |
 | 4 | 7-8 | Analyses + Chat IA | 10 | Analyses avancées, assistant IA |
 | 5 | 9-10 | Polish + Déploiement | 12 | Qualité, sécurité, production |
 | **Total MVP** | **10 semaines** | **13 epics** | **67 tickets** | |

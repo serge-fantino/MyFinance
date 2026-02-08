@@ -220,8 +220,8 @@ Le système utilise un moteur de **règles explicites** pour classifier automati
 
 **Moteur de classification — Ordre d'exécution :**
 1. **Règles utilisateur** : pour chaque transaction non classée, le moteur cherche la première règle active dont le pattern correspond au libellé (`label_raw`). Si trouvée : assigne la catégorie + le libellé personnalisé.
-2. **Classification IA** (OpenAI) : les transactions restantes non classées sont envoyées en batch à l'IA. L'IA reçoit comme contexte la liste des catégories ET les règles existantes de l'utilisateur. Confiance affichée (haute / moyenne / basse).
-3. **IA → Suggestions de règles** : l'IA peut suggérer de nouvelles règles basées sur les patterns récurrents qu'elle détecte.
+2. **Calcul d'embeddings** : les transactions non classées sont vectorisées localement via sentence-transformers (CPU).
+3. **Suggestions par embeddings** : clustering HDBSCAN + suggestion par voisinage k-NN ou sémantique des catégories. L'utilisateur valide chaque suggestion.
 
 **Création automatique de règles :**
 - Quand un utilisateur assigne manuellement une catégorie à une transaction, le système **crée automatiquement une règle** de type `contains` basée sur le libellé de la transaction.
@@ -233,13 +233,37 @@ Le système utilise un moteur de **règles explicites** pour classifier automati
 - Chaque règle affiche : pattern, catégorie, libellé personnalisé, nombre de transactions matchées
 - Possibilité de tester une règle avant de l'enregistrer
 
-#### 3.5.3 Classification IA
+#### 3.5.3 Classification par embeddings (local)
 
-- À l'import, les transactions sont d'abord classées par le moteur de règles, puis les restantes sont envoyées à l'IA
-- Le modèle (OpenAI GPT-4o) utilise le libellé + le montant + les règles existantes + les corrections récentes comme contexte
+> Voir [EMBEDDING_CLASSIFICATION.md](EMBEDDING_CLASSIFICATION.md) pour la stratégie détaillée.
+
+La classification IA a été remplacée par un système local basé sur des embeddings sémantiques :
+
+- **Modèle** : `paraphrase-multilingual-MiniLM-L12-v2` (sentence-transformers, CPU, 384 dimensions)
+- **Stockage** : colonne `vector(384)` via pgvector dans PostgreSQL
+- **Pipeline** : à l'import, les embeddings sont calculés localement après application des règles
+
+**Suggestion par voisinage (k-NN) :**
+- Pour chaque transaction non classée, recherche des K=5 transactions classées les plus proches par similarité cosinus
+- Si la similarité dépasse le seuil → suggestion de la catégorie la plus fréquente parmi les voisins
+
+**Suggestion par sémantique des catégories :**
+- Les noms de catégories sont aussi projetés dans l'espace d'embeddings (`"Dépenses > Alimentation"`)
+- Si aucun voisin classé n'est assez proche → comparaison directe avec les embeddings des catégories
+
+**Clustering HDBSCAN :**
+- Les transactions non classées sont regroupées en clusters par similarité
+- Chaque cluster reçoit une suggestion de catégorie (par voisinage ou sémantique)
+- L'utilisateur décide d'accepter, modifier ou ignorer chaque suggestion
+
+**Principes :**
+- L'utilisateur garde **toujours le contrôle** : aucune classification automatique par embeddings
+- Le système **propose**, l'utilisateur **dispose**
 - Confiance affichée : badge coloré (vert = high, orange = medium, rouge = low)
-- L'utilisateur peut corriger une classification IA → cela crée/met à jour une règle (feedback loop durable)
-- Les catégories personnalisables sont incluses dans le prompt
+- L'utilisateur peut corriger → cela crée/met à jour une règle (feedback loop durable)
+- Les corrections enrichissent automatiquement les suggestions futures (via similarité)
+
+**Intégration OpenAI** : désactivée au profit du système local. Peut être réactivée comme couche complémentaire.
 
 ### 3.6 Tableau de bord
 
