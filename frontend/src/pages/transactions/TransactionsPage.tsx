@@ -7,11 +7,12 @@ import { TransactionKPIs } from "./TransactionKPIs";
 import { TransactionFilters, type FilterState } from "./TransactionFilters";
 import { CategoryRuleModal, type CategoryRuleModalPayload } from "./CategoryRuleModal";
 import { EditTransactionModal, type EditTransactionPayload } from "./EditTransactionModal";
+import { ClusterReviewModal } from "./ClusterReviewModal";
 import { transactionService } from "../../services/transaction.service";
 import { accountService } from "../../services/account.service";
 import { categoryService } from "../../services/category.service";
 import { formatCurrency, formatDate } from "../../utils/format";
-import type { Transaction, PaginatedTransactions, CashflowMonthly, CashflowDaily } from "../../types/transaction.types";
+import type { Transaction, PaginatedTransactions, CashflowMonthly, CashflowDaily, ClustersResponse } from "../../types/transaction.types";
 import type { Account } from "../../types/account.types";
 import type { Category } from "../../types/category.types";
 
@@ -69,8 +70,9 @@ export default function TransactionsPage() {
     search: "",
   });
 
-  // AI classify
-  const [classifying, setClassifying] = useState(false);
+  // Cluster review
+  const [clusterLoading, setClusterLoading] = useState(false);
+  const [clustersData, setClustersData] = useState<ClustersResponse | null>(null);
 
   // Debounced search
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -208,28 +210,37 @@ export default function TransactionsPage() {
     [fetchTransactions, fetchCashflow]
   );
 
-  const handleClassify = useCallback(async () => {
+  const handleShowClusters = useCallback(async () => {
     try {
-      setClassifying(true);
+      setClusterLoading(true);
+      setError(null);
       const accountIdParam = filters.accountId ? parseInt(filters.accountId) : undefined;
-      const result = await transactionService.classify(accountIdParam);
-      if (result.classified > 0) {
-        // Refresh data to show new categories
-        fetchTransactions();
+      // Step 1: compute missing embeddings
+      await transactionService.computeEmbeddings(accountIdParam);
+      // Step 2: fetch clusters with suggestions
+      const result = await transactionService.getClusters(accountIdParam);
+      if (result.total_uncategorized === 0) {
+        setError("Toutes les transactions sont deja classees.");
+      } else {
+        setClustersData(result);
       }
-      setError(
-        result.classified > 0
-          ? null
-          : result.total === 0
-          ? "Aucune transaction à classifier."
-          : null
-      );
     } catch {
-      setError("Erreur lors de la classification IA. Vérifiez la clé OpenAI.");
+      setError("Erreur lors du calcul des suggestions.");
     } finally {
-      setClassifying(false);
+      setClusterLoading(false);
     }
-  }, [filters.accountId, fetchTransactions]);
+  }, [filters.accountId]);
+
+  const handleClusterClose = useCallback(
+    (refreshNeeded: boolean) => {
+      setClustersData(null);
+      if (refreshNeeded) {
+        fetchTransactions();
+        fetchCashflow();
+      }
+    },
+    [fetchTransactions, fetchCashflow]
+  );
 
   // Build flat category list for the dropdown (must be before handleCategoryChange)
   const flatCategories = useMemo(() => {
@@ -404,21 +415,21 @@ export default function TransactionsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Transactions</h1>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={handleClassify} disabled={classifying}>
-            {classifying ? (
+          <Button variant="outline" onClick={handleShowClusters} disabled={clusterLoading}>
+            {clusterLoading ? (
               <>
                 <svg className="w-4 h-4 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
-                Classification...
+                Analyse...
               </>
             ) : (
               <>
                 <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                 </svg>
-                Classifier (IA)
+                Suggestions
               </>
             )}
           </Button>
@@ -582,6 +593,15 @@ export default function TransactionsPage() {
         onSave={handleEditTransactionSave}
         onCategoryDropdownOpen={fetchCategories}
       />
+
+      {clustersData && (
+        <ClusterReviewModal
+          clusters={clustersData}
+          flatCategories={flatCategories}
+          onClose={handleClusterClose}
+          onCategoryDropdownOpen={fetchCategories}
+        />
+      )}
     </div>
   );
 }
@@ -676,6 +696,7 @@ const CONFIDENCE_BADGE: Record<string, { label: string; className: string }> = {
   high: { label: "IA", className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400" },
   medium: { label: "IA", className: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400" },
   low: { label: "IA?", className: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" },
+  embedding: { label: "E", className: "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400" },
   user: { label: "", className: "" },
 };
 
@@ -703,7 +724,7 @@ function TransactionRow({
   const [pendingCatId, setPendingCatId] = useState<number | null>(null);
   const [customLabel, setCustomLabel] = useState("");
 
-  const confidence = txn.ai_confidence && txn.ai_confidence !== "user" && txn.ai_confidence !== "rule"
+  const confidence = txn.ai_confidence && CONFIDENCE_BADGE[txn.ai_confidence]?.label
     ? CONFIDENCE_BADGE[txn.ai_confidence]
     : null;
 

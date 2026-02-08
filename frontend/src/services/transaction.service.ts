@@ -5,7 +5,10 @@ import api from "./api";
 import type {
   CashflowDaily,
   CashflowMonthly,
-  ClassifyResult,
+  ClusterClassifyRequest,
+  ClusterClassifyResult,
+  ClustersResponse,
+  ComputeEmbeddingsResult,
   ImportResult,
   PaginatedTransactions,
   Transaction,
@@ -62,10 +65,25 @@ export const transactionService = {
     return response.data;
   },
 
-  async classify(accountId?: number): Promise<ClassifyResult> {
-    const response = await api.post("/transactions/classify", null, {
+  // ── Embedding-based classification ──────────────────
+
+  async computeEmbeddings(accountId?: number): Promise<ComputeEmbeddingsResult> {
+    const response = await api.post("/transactions/compute-embeddings", null, {
       params: accountId ? { account_id: accountId } : {},
     });
+    return response.data;
+  },
+
+  async getClusters(accountId?: number, minClusterSize?: number): Promise<ClustersResponse> {
+    const params: Record<string, unknown> = {};
+    if (accountId) params.account_id = accountId;
+    if (minClusterSize) params.min_cluster_size = minClusterSize;
+    const response = await api.get("/transactions/clusters", { params });
+    return response.data;
+  },
+
+  async classifyCluster(data: ClusterClassifyRequest): Promise<ClusterClassifyResult> {
+    const response = await api.post("/transactions/clusters/classify", data);
     return response.data;
   },
 };
