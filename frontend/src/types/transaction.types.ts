@@ -71,14 +71,8 @@ export interface ImportResult {
   duplicate_count: number;
   error_count: number;
   errors: string[] | null;
-  ai_classified?: number;
-}
-
-export interface ClassifyResult {
-  classified: number;
-  failed: number;
-  skipped: number;
-  total: number;
+  rules_applied?: number;
+  embeddings_computed?: number;
 }
 
 export interface CashflowMonthly {
@@ -96,4 +90,51 @@ export interface CashflowDaily {
   expenses: number;
   cumulative: number;
   count: number;
+}
+
+// ── Embedding classification types ────────────────────
+
+export interface ComputeEmbeddingsResult {
+  computed: number;
+  skipped: number;
+  total: number;
+}
+
+export interface ClusterSampleTransaction {
+  id: number;
+  label_raw: string;
+  amount: number;
+  date: string;
+}
+
+export interface TransactionCluster {
+  cluster_id: number;
+  transaction_count: number;
+  transaction_ids: number[];
+  sample_transactions: ClusterSampleTransaction[];
+  representative_label: string;
+  suggested_category_id: number | null;
+  suggested_category_name: string | null;
+  suggestion_confidence: string | null; // high, medium, low
+  suggestion_similarity: number | null;
+  suggestion_source: string | null;     // similar_transactions, category_semantics
+}
+
+export interface ClustersResponse {
+  clusters: TransactionCluster[];
+  unclustered_count: number;
+  total_uncategorized: number;
+}
+
+export interface ClusterClassifyRequest {
+  transaction_ids: number[];
+  category_id: number;
+  create_rule?: boolean;
+  rule_pattern?: string;
+  custom_label?: string;
+}
+
+export interface ClusterClassifyResult {
+  classified_count: number;
+  rule_created: boolean;
 }
