@@ -1,7 +1,7 @@
 """Embedding-based transaction classification service.
 
 Uses sentence-transformers (local, no GPU required) to compute embeddings
-for transaction labels, then uses cosine similarity and HDBSCAN clustering
+for transaction labels, then uses cosine similarity and AgglomerativeClustering
 to group similar transactions and suggest categories.
 
 Category names are also projected into the embedding space to provide
@@ -11,7 +11,7 @@ semantic suggestions even without user-classified reference data.
 import numpy as np
 import structlog
 from sentence_transformers import SentenceTransformer
-from sklearn.cluster import HDBSCAN
+from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -364,23 +364,31 @@ class EmbeddingService:
                 "total_uncategorized": total_uncategorized,
             }
 
-        # Build embedding matrix
-        embeddings = np.array([list(t.embedding) for t in uncategorized])
+        # Build embedding matrix (float64)
+        embeddings = np.asarray(
+            [np.asarray(t.embedding, dtype=np.float64).ravel() for t in uncategorized],
+            dtype=np.float64,
+        )
 
-        # Compute cosine distance matrix (1 - similarity)
+        # Cosine distance matrix (sklearn HDBSCAN has a bug with 0-dim arrays, use AgglomerativeClustering)
         sim_matrix = cosine_similarity(embeddings)
-        distance_matrix = 1.0 - sim_matrix
-        # Clamp small negative values from floating point errors
-        distance_matrix = np.clip(distance_matrix, 0, 2)
+        distance_matrix = np.clip(1.0 - sim_matrix, 0.0, 2.0)
+        np.fill_diagonal(distance_matrix, 0.0)
+        distance_matrix = np.ascontiguousarray(distance_matrix.astype(np.float64))
 
-        # Run HDBSCAN
-        clusterer = HDBSCAN(
-            min_cluster_size=min_cluster_size,
-            min_samples=2,
+        clusterer = AgglomerativeClustering(
+            n_clusters=None,
+            distance_threshold=0.5,
             metric="precomputed",
-            cluster_selection_epsilon=0.15,
+            linkage="average",
         )
         labels = clusterer.fit_predict(distance_matrix)
+
+        # Enforce min_cluster_size: treat small clusters as noise (label -1)
+        min_size = int(min_cluster_size)
+        unique, counts = np.unique(labels, return_counts=True)
+        small_labels = {u for u, c in zip(unique, counts) if c < min_size}
+        labels = np.array([-1 if l in small_labels else l for l in labels])
 
         # Group transactions by cluster
         cluster_map: dict[int, list[int]] = {}

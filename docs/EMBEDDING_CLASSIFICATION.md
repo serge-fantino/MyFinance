@@ -333,7 +333,7 @@ Le endpoint `POST /transactions/import` est modifié :
 |-----------|-------|
 | `pgvector` | Type `vector`, opérateurs de distance, index HNSW |
 
-L'image Docker est remplacée par `pgvector/pgvector:pg16-alpine` qui est un drop-in replacement de `postgres:16-alpine` avec l'extension pgvector pré-installée.
+L'image Docker est remplacée par `pgvector/pgvector:pg16` (Debian-based, drop-in replacement de `postgres:16` avec l'extension pgvector pré-installée).
 
 ---
 
