@@ -37,19 +37,20 @@
 │       │              │              │               │         │
 │  ┌────┴──────────────┴──────────────┴───────────────┴─────┐  │
 │  │                  Service Layer                          │  │
-│  │  AuthService │ AccountService │ ImportService │ AIServ. │  │
+│  │  AuthService │ AccountService │ ImportService │ EmbeddingSvc│
 │  └────┬──────────────┴──────────────┴───────────────┬─────┘  │
 │       │                                             │         │
 └───────┼─────────────────────────────────────────────┼────────┘
         │                                             │
         ▼                                             ▼
 ┌───────────────┐  ┌───────────┐            ┌────────────────┐
-│  PostgreSQL   │  │   Redis   │            │   OpenAI API   │
-│    16         │  │     7     │            │   (GPT-4o)     │
-│               │  │           │            │                │
-│  - Users      │  │  - Cache  │            │  - Classify    │
-│  - Accounts   │  │  - Queue  │            │  - Chat        │
-│  - Txns       │  │  - Sessions│           │  - Analyze     │
+│  PostgreSQL   │  │   Redis   │            │  sentence-     │
+│  16 + pgvector│  │     7     │            │  transformers  │
+│               │  │           │            │  (local CPU)   │
+│  - Users      │  │  - Cache  │            │                │
+│  - Accounts   │  │  - Queue  │            │  - Embeddings  │
+│  - Txns       │  │  - Sessions│           │  - Clustering  │
+│  - Vectors    │  │           │            │  - Similarity  │
 │  - Categories │  │           │            │                │
 └───────────────┘  └───────────┘            └────────────────┘
 ```
@@ -84,7 +85,10 @@
 | Migrations | **Alembic** | Standard pour SQLAlchemy |
 | Validation | **Pydantic v2** | Intégré à FastAPI, performant |
 | Auth | **python-jose** (JWT) + **bcrypt** | Standards éprouvés |
-| IA | **LangChain** + **OpenAI SDK** | Abstraction LLM, chaînes de prompts |
+| IA (désactivé) | **LangChain** + **OpenAI SDK** | Abstraction LLM, chaînes de prompts (désactivé) |
+| Embeddings | **sentence-transformers** | Embeddings multilingual locaux (CPU) |
+| Vecteurs | **pgvector** | Extension PostgreSQL pour similarité vectorielle |
+| Clustering | **scikit-learn** (HDBSCAN) | Regroupement de transactions similaires |
 | Import fichiers | **openpyxl** (Excel) + **ofxparse** | Parsing des formats financiers |
 | Tâches async | **ARQ** (Redis-based) | File d'attente légère, async native |
 | Tests | **pytest** + **httpx** | Tests async, fixtures |
@@ -94,7 +98,7 @@
 
 | Composant | Technologie | Justification |
 |-----------|------------|---------------|
-| SGBD | **PostgreSQL 16** | Robuste, JSON, fulltext search, extensions |
+| SGBD | **PostgreSQL 16** + **pgvector** | Robuste, JSON, fulltext search, similarité vectorielle |
 | Cache | **Redis 7** | Cache de sessions, queue de tâches, rate limiting |
 
 ### 2.4 Infrastructure
@@ -133,11 +137,11 @@
        ┌──────────┐    └──────────────────┘       │ dedup_hash       │
        │categories│                                │ source           │
        ├──────────┤                                │ ai_confidence    │
-       │id (PK)   │◀──────────────────────────────│ created_at       │
-       │user_id   │                                │ updated_at       │
-       │name      │                                │ deleted_at       │
-       │parent_id │    ┌──────────────────┐        └──────────────────┘
-       │icon      │    │  conversations   │
+       │id (PK)   │◀──────────────────────────────│ embedding        │ ← vector(384)
+       │user_id   │                                │ created_at       │
+       │name      │                                │ updated_at       │
+       │parent_id │    ┌──────────────────┐        │ deleted_at       │
+       │icon      │    │  conversations   │        └──────────────────┘
        │color     │    ├──────────────────┤
        │is_system │    │ id (PK)          │        ┌──────────────────┐
        │created_at│    │ user_id (FK)     │        │    messages      │
@@ -197,6 +201,9 @@ CREATE INDEX idx_categories_user ON categories(user_id);
 
 -- Règles de classification par utilisateur
 CREATE INDEX idx_classification_rules_user ON classification_rules(user_id, is_active);
+
+-- Recherche de similarité vectorielle (pgvector HNSW)
+CREATE INDEX idx_transactions_embedding ON transactions USING hnsw (embedding vector_cosine_ops);
 ```
 
 ---
@@ -232,7 +239,9 @@ CREATE INDEX idx_classification_rules_user ON classification_rules(user_id, is_a
 │   ├── GET    /                  # Liste (paginée, filtrable)
 │   ├── POST   /                  # Créer manuellement
 │   ├── GET    /cashflow          # Données cashflow (mensuel/journalier)
-│   ├── POST   /classify          # Classifier (IA) les transactions non classées
+│   ├── POST   /compute-embeddings # Calculer les embeddings manquants (local)
+│   ├── GET    /clusters          # Clusters de transactions similaires + suggestions
+│   ├── POST   /clusters/classify # Classifier un cluster de transactions
 │   ├── GET    /:id               # Détail
 │   ├── PATCH  /:id               # Modifier (+ crée une règle si catégorie changée)
 │   ├── DELETE /:id               # Supprimer
@@ -338,7 +347,8 @@ backend/
 │   │   ├── import_service.py
 │   │   ├── category_service.py
 │   │   ├── analytics_service.py
-│   │   └── ai_service.py
+│   │   ├── embedding_service.py  # Classification par embeddings (local)
+│   │   └── ai_service.py         # OpenAI (désactivé)
 │   │
 │   └── utils/                  # Utilitaires
 │       ├── file_parsers.py     # Parsers CSV, Excel, OFX, QIF

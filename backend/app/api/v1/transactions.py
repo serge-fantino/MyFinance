@@ -10,14 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_db
 from app.models.user import User
 from app.schemas.transaction import (
-    ClassifyResult,
+    ClusterClassifyRequest,
+    ClusterClassifyResult,
+    ClustersResponse,
+    ComputeEmbeddingsResult,
     ImportResult,
     PaginatedResponse,
     TransactionCreate,
     TransactionResponse,
     TransactionUpdate,
 )
-from app.services.ai_service import AIClassificationService
+from app.services.embedding_service import EmbeddingService
 from app.services.import_service import ImportService
 from app.services.transaction_service import TransactionService
 
@@ -83,19 +86,68 @@ async def get_cashflow(
     return await service.get_cashflow(current_user, account_id, granularity)
 
 
-@router.post("/classify", response_model=ClassifyResult)
-async def classify_transactions(
+# ── Embedding-based classification endpoints ─────────────
+
+
+@router.post("/compute-embeddings", response_model=ComputeEmbeddingsResult)
+async def compute_embeddings(
     account_id: int | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Classify uncategorized transactions using AI.
+    """Compute embeddings for transactions that don't have one yet.
 
-    Optionally filter to a specific account. Uses the user's previous
-    manual categorizations as context for better predictions.
+    This is a prerequisite for clustering and similarity-based suggestions.
+    Embeddings are computed locally using sentence-transformers (no GPU needed).
     """
-    service = AIClassificationService(db)
-    return await service.classify_uncategorized(current_user, account_id)
+    service = EmbeddingService(db)
+    return await service.compute_missing_embeddings(current_user, account_id)
+
+
+@router.get("/clusters", response_model=ClustersResponse)
+async def get_clusters(
+    account_id: int | None = None,
+    min_cluster_size: int = Query(3, ge=2, le=50),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get clusters of similar uncategorized transactions with category suggestions.
+
+    Each cluster groups transactions with similar labels/patterns and proposes
+    a category based on:
+    1. Previously classified similar transactions (k-NN)
+    2. Semantic similarity to category names (fallback)
+
+    The user decides whether to accept, modify, or ignore each suggestion.
+    """
+    service = EmbeddingService(db)
+    return await service.get_clusters(current_user, account_id, min_cluster_size)
+
+
+@router.post("/clusters/classify", response_model=ClusterClassifyResult)
+async def classify_cluster(
+    data: ClusterClassifyRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Classify a cluster (or arbitrary set) of transactions.
+
+    Applies the chosen category to all specified transactions.
+    Optionally creates a classification rule for future transactions.
+    The user always controls what gets classified — nothing is automatic.
+    """
+    service = EmbeddingService(db)
+    return await service.classify_transactions(
+        transaction_ids=data.transaction_ids,
+        category_id=data.category_id,
+        user=current_user,
+        custom_label=data.custom_label,
+        create_rule=data.create_rule,
+        rule_pattern=data.rule_pattern,
+    )
+
+
+# ── Single transaction CRUD ─────────────────────────────
 
 
 @router.get("/{transaction_id}", response_model=TransactionResponse)
@@ -132,6 +184,9 @@ async def delete_transaction(
     await service.delete_transaction(transaction_id, current_user)
 
 
+# ── Import ──────────────────────────────────────────────
+
+
 @router.post("/import", response_model=ImportResult)
 async def import_transactions(
     account_id: int,
@@ -141,8 +196,11 @@ async def import_transactions(
 ):
     """Import transactions from a file (CSV, Excel, OFX/QFX/XML).
 
-    After a successful import, automatically triggers AI classification
-    on the newly imported (uncategorized) transactions.
+    After a successful import:
+    1. Applies user classification rules (fast, deterministic)
+    2. Computes embeddings for new transactions (local, no API call)
+
+    Classification suggestions are then available via GET /clusters.
     """
     content = await file.read()
     service = ImportService(db)
@@ -153,8 +211,7 @@ async def import_transactions(
         content=content,
     )
 
-    # Auto-classify newly imported transactions (best-effort)
-    # Step 1: Apply user rules first (fast, no API call)
+    # Auto-classify with rules (fast, no API call)
     if result["imported_count"] > 0:
         try:
             from app.services.rule_service import RuleService
@@ -170,21 +227,21 @@ async def import_transactions(
             logger.warning("auto_rules_failed", error=str(e))
             result["rules_applied"] = 0
 
-    # Step 2: Then AI classification for remaining uncategorized
+    # Compute embeddings for new transactions (local, best-effort)
     if result["imported_count"] > 0:
         try:
-            ai_service = AIClassificationService(db)
-            classify_result = await ai_service.classify_uncategorized(
-                current_user, account_id, limit=result["imported_count"]
+            embedding_service = EmbeddingService(db)
+            emb_result = await embedding_service.compute_missing_embeddings(
+                current_user, account_id
             )
-            result["ai_classified"] = classify_result.get("classified", 0)
+            result["embeddings_computed"] = emb_result["computed"]
             logger.info(
-                "auto_classify_after_import",
+                "auto_embeddings_after_import",
                 imported=result["imported_count"],
-                classified=result.get("ai_classified", 0),
+                embeddings_computed=emb_result["computed"],
             )
         except Exception as e:
-            logger.warning("auto_classify_failed", error=str(e))
-            result["ai_classified"] = 0
+            logger.warning("auto_embeddings_failed", error=str(e))
+            result["embeddings_computed"] = 0
 
     return result

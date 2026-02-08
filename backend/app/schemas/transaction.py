@@ -72,12 +72,59 @@ class ImportResult(BaseModel):
     duplicate_count: int
     error_count: int
     errors: list[str] | None = None
-    ai_classified: int | None = None
+    rules_applied: int | None = None
+    embeddings_computed: int | None = None
 
 
-class ClassifyResult(BaseModel):
-    """Result of AI classification."""
-    classified: int
-    failed: int
+# ── Embedding classification schemas ────────────────────
+
+
+class ComputeEmbeddingsResult(BaseModel):
+    """Result of computing embeddings for transactions."""
+    computed: int
     skipped: int
     total: int
+
+
+class ClusterSampleTransaction(BaseModel):
+    """A sample transaction within a cluster."""
+    id: int
+    label_raw: str
+    amount: float
+    date: str
+
+
+class TransactionCluster(BaseModel):
+    """A cluster of similar uncategorized transactions with a category suggestion."""
+    cluster_id: int
+    transaction_count: int
+    transaction_ids: list[int]
+    sample_transactions: list[ClusterSampleTransaction]
+    representative_label: str
+    suggested_category_id: int | None = None
+    suggested_category_name: str | None = None
+    suggestion_confidence: str | None = None  # high, medium, low
+    suggestion_similarity: float | None = None
+    suggestion_source: str | None = None  # similar_transactions, category_semantics
+
+
+class ClustersResponse(BaseModel):
+    """Response for the clustering endpoint."""
+    clusters: list[TransactionCluster]
+    unclustered_count: int
+    total_uncategorized: int
+
+
+class ClusterClassifyRequest(BaseModel):
+    """Request to classify a cluster (or arbitrary set) of transactions."""
+    transaction_ids: list[int]
+    category_id: int
+    create_rule: bool = True
+    rule_pattern: str | None = None
+    custom_label: str | None = None
+
+
+class ClusterClassifyResult(BaseModel):
+    """Result of classifying a cluster of transactions."""
+    classified_count: int
+    rule_created: bool
