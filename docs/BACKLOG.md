@@ -125,8 +125,22 @@
 | 7b.5 | Intégration import → embeddings | P0 | S | ✅ Done | Après import : règles → calcul embeddings. Suggestions disponibles via `/clusters` |
 | 7b.6 | Désactivation OpenAI | P0 | S | ✅ Done | Dépendances commentées, import pipeline sans appel API |
 | 7b.7 | Documentation stratégie | P0 | M | ✅ Done | `EMBEDDING_CLASSIFICATION.md` : architecture, algorithmes, seuils, pipeline |
-| 7b.8 | UI vue clusters | P1 | L | 🔲 TODO | Page de revue des clusters avec suggestions, accept/reject/modify par cluster |
+| 7b.8 | UI vue clusters | P1 | L | ✅ Done | Modal de revue des clusters avec suggestions, accept/reject/modify par cluster |
 | 7b.9 | UI suggestions inline | P2 | M | 🔲 TODO | Badge suggestion sur chaque transaction non classée dans la liste |
+
+### Epic 7c : Preprocessing des libellés bancaires
+
+> Parsing classique (regex) des libellés pour extraire des métadonnées structurées avant le calcul d'embeddings.
+
+| # | Ticket | Priorité | Taille | Statut | Description |
+|---|--------|----------|--------|--------|-------------|
+| 7c.1 | Label parser service | P0 | M | ✅ Done | Service `label_parser.py` : regex pour extraire mode de paiement, tiers, carte, date depuis les libellés bancaires français |
+| 7c.2 | Migration parsed_metadata | P0 | S | ✅ Done | Migration 006 : colonne `parsed_metadata` JSONB sur transactions |
+| 7c.3 | Intégration import pipeline | P0 | S | ✅ Done | Parsing automatique à l'import, stockage des métadonnées sur chaque transaction |
+| 7c.4 | Embedding sur counterparty | P0 | S | ✅ Done | `_build_embedding_text()` utilise le tiers nettoyé (counterparty) au lieu du libellé brut complet |
+| 7c.5 | API parse-labels | P0 | S | ✅ Done | `POST /parse-labels` : parser les libellés existants (retro-compatibilité), reset embeddings |
+| 7c.6 | UI affichage métadonnées | P0 | M | ✅ Done | Badge mode de paiement + tiers nettoyé + carte dans la liste des transactions |
+| 7c.7 | Documentation | P0 | S | ✅ Done | Mise à jour SPECS, ARCHITECTURE, BACKLOG, EMBEDDING_CLASSIFICATION |
 
 ### Epic 8 : Dashboard
 

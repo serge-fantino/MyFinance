@@ -219,9 +219,10 @@ Le système utilise un moteur de **règles explicites** pour classifier automati
 - **Propriétaire** : chaque règle appartient à un utilisateur
 
 **Moteur de classification — Ordre d'exécution :**
-1. **Règles utilisateur** : pour chaque transaction non classée, le moteur cherche la première règle active dont le pattern correspond au libellé (`label_raw`). Si trouvée : assigne la catégorie + le libellé personnalisé.
-2. **Calcul d'embeddings** : les transactions non classées sont vectorisées localement via sentence-transformers (CPU).
-3. **Suggestions par embeddings** : clustering HDBSCAN + suggestion par voisinage k-NN ou sémantique des catégories. L'utilisateur valide chaque suggestion.
+1. **Parsing des libellés** : extraction automatique des métadonnées structurées (mode de paiement, tiers, carte, date) depuis le libellé brut via pattern matching.
+2. **Règles utilisateur** : pour chaque transaction non classée, le moteur cherche la première règle active dont le pattern correspond au libellé (`label_raw`). Si trouvée : assigne la catégorie + le libellé personnalisé.
+3. **Calcul d'embeddings** : les transactions non classées sont vectorisées localement via sentence-transformers (CPU). Le texte embedé utilise le nom du tiers nettoyé (counterparty) plutôt que le libellé brut complet.
+4. **Suggestions par embeddings** : clustering HDBSCAN + suggestion par voisinage k-NN ou sémantique des catégories. L'utilisateur valide chaque suggestion.
 
 **Création automatique de règles :**
 - Quand un utilisateur assigne manuellement une catégorie à une transaction, le système **crée automatiquement une règle** de type `contains` basée sur le libellé de la transaction.
@@ -239,9 +240,11 @@ Le système utilise un moteur de **règles explicites** pour classifier automati
 
 La classification IA a été remplacée par un système local basé sur des embeddings sémantiques :
 
+- **Preprocessing** : les libellés bancaires sont parsés pour extraire des métadonnées structurées (mode de paiement, tiers, carte, date) via regex. Les métadonnées sont stockées dans une colonne `parsed_metadata` (JSONB).
 - **Modèle** : `paraphrase-multilingual-MiniLM-L12-v2` (sentence-transformers, CPU, 384 dimensions)
 - **Stockage** : colonne `vector(384)` via pgvector dans PostgreSQL
-- **Pipeline** : à l'import, les embeddings sont calculés localement après application des règles
+- **Input amélioré** : l'embedding est calculé sur le nom du tiers nettoyé (`counterparty`) plutôt que sur le libellé brut complet, ce qui améliore significativement la qualité du clustering (regroupement par marchand plutôt que par type de paiement).
+- **Pipeline** : à l'import : parsing libellé → application règles → calcul embeddings
 
 **Suggestion par voisinage (k-NN) :**
 - Pour chaque transaction non classée, recherche des K=5 transactions classées les plus proches par similarité cosinus

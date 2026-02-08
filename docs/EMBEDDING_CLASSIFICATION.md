@@ -46,6 +46,19 @@ Les libellés bancaires présentent des défis spécifiques :
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
+│  0. Parsing du libellé (label_parser, regex classique)           │
+│                                                                  │
+│     Extrait des métadonnées structurées depuis label_raw :       │
+│     - Mode de paiement (CB, VIR SEPA, PRLV, etc.)               │
+│     - Tiers / contrepartie (nom du marchand)                     │
+│     - Identifiant carte (CARTE 4974XXXXXXXX3769)                 │
+│     - Date d'opération (si présente dans le libellé)             │
+│                                                                  │
+│     Stockage : colonne parsed_metadata (JSONB) sur transactions  │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────────┐
 │  1. Moteur de règles (existant, inchangé)                        │
 │     Pattern matching sur label_raw → catégorie                   │
 │     Rapide, déterministe, priorité haute                         │
@@ -55,7 +68,8 @@ Les libellés bancaires présentent des défis spécifiques :
 ┌─────────────────────────────────────────────────────────────────┐
 │  2. Calcul d'embedding (sentence-transformers, local CPU)        │
 │                                                                  │
-│     Input : label_raw + signe du montant (income/expense)        │
+│     Input : counterparty (tiers nettoyé) + [income/expense]      │
+│     Fallback : label_raw si pas de counterparty détecté          │
 │     Modèle : paraphrase-multilingual-MiniLM-L12-v2 (384 dims)   │
 │     Stockage : colonne Vector(384) via pgvector dans PostgreSQL  │
 │                                                                  │
@@ -132,14 +146,17 @@ Les libellés bancaires présentent des défis spécifiques :
 - Rapide sur CPU → pas besoin de GPU
 - Bonne qualité de similarité sémantique
 
-**Input enrichi :**
-Pour améliorer la qualité des embeddings, le texte d'entrée combine :
+**Input optimisé :**
+Le texte d'entrée pour l'embedding utilise le **tiers nettoyé** (counterparty) extrait par le label parser, plutôt que le libellé brut complet. Cela évite que le mode de paiement, les dates et les numéros de carte dominent l'embedding :
 ```
-"{label_raw} [{direction}]"
+"{counterparty} [{direction}]"
 ```
+Si aucun tiers n'a pu être extrait, le label_raw complet est utilisé en fallback.
+
 Exemples :
-- `"AMAZON PRIME FR [expense]"` → embedding
-- `"VIR SEPA SALAIRE [income]"` → embedding
+- `"FACTURE CARTE — DU 140126 PARK TRIVAUX BS MEUDON CARTE 4974..."` → **`"PARK TRIVAUX BS MEUDON [expense]"`**
+- `"VIREMENT SEPA — CPAM DES HAUTS DE SEINE"` → **`"CPAM DES HAUTS DE SEINE [income]"`**
+- `"AMAZON PRIME FR"` (pas de parsing possible) → `"AMAZON PRIME FR [expense]"`
 
 Le tag `[income]`/`[expense]` aide le modèle à distinguer les virements de nature différente.
 
