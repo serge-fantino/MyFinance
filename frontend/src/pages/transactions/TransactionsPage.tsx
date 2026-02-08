@@ -5,6 +5,8 @@ import { ImportModal } from "./ImportModal";
 import { CashflowChart, type ChartGranularity } from "./CashflowChart";
 import { TransactionKPIs } from "./TransactionKPIs";
 import { TransactionFilters, type FilterState } from "./TransactionFilters";
+import { CategoryRuleModal, type CategoryRuleModalPayload } from "./CategoryRuleModal";
+import { EditTransactionModal, type EditTransactionPayload } from "./EditTransactionModal";
 import { transactionService } from "../../services/transaction.service";
 import { accountService } from "../../services/account.service";
 import { categoryService } from "../../services/category.service";
@@ -88,11 +90,15 @@ export default function TransactionsPage() {
   // Column widths (resizable)
   const [colWidths, setColWidths] = useState<number[]>(COLUMNS.map((c) => c.defaultWidth));
 
+  const fetchCategories = useCallback(() => {
+    categoryService.list().then(setCategories).catch(() => {});
+  }, []);
+
   // Fetch reference data
   useEffect(() => {
     accountService.list().then(setAccounts).catch(() => {});
-    categoryService.list().then(setCategories).catch(() => {});
-  }, []);
+    fetchCategories();
+  }, [fetchCategories]);
 
   // Fetch cashflow (both granularities for instant toggle)
   const accountIdNum = filters.accountId ? parseInt(filters.accountId) : undefined;
@@ -239,6 +245,16 @@ export default function TransactionsPage() {
     return flat;
   }, [categories]);
 
+  // Modal: confirm rule creation or apply only
+  const [ruleModalPayload, setRuleModalPayload] = useState<CategoryRuleModalPayload | null>(null);
+  // Modal: edit transaction (double-click)
+  const [editTransaction, setEditTransaction] = useState<Transaction | null>(null);
+
+  // Rafraîchir les catégories à l’ouverture du modal d’édition (liste à jour dans le select)
+  useEffect(() => {
+    if (editTransaction) fetchCategories();
+  }, [editTransaction, fetchCategories]);
+
   const handleCategoryChange = useCallback(
     async (txnId: number, categoryId: number | null, customLabel?: string) => {
       try {
@@ -246,12 +262,10 @@ export default function TransactionsPage() {
           category_id: categoryId ?? undefined,
           custom_label: customLabel,
         });
-        // If a rule was applied to other transactions, do a full refresh
         if (result.rule_applied_count && result.rule_applied_count > 0) {
           fetchTransactions();
           fetchCashflow();
         } else {
-          // Just update locally
           setData((prev) => {
             if (!prev) return prev;
             return {
@@ -275,6 +289,106 @@ export default function TransactionsPage() {
       }
     },
     [flatCategories, fetchTransactions, fetchCashflow]
+  );
+
+  const handleCreateRule = useCallback(
+    async (txnId: number, categoryId: number, pattern: string, customLabel?: string) => {
+      try {
+        const result = await transactionService.update(txnId, {
+          category_id: categoryId,
+          custom_label: customLabel,
+          create_rule: true,
+          rule_pattern: pattern,
+        });
+        if (result.rule_applied_count && result.rule_applied_count > 0) {
+          fetchTransactions();
+          fetchCashflow();
+        } else {
+          setData((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              data: prev.data.map((t) => {
+                if (t.id !== txnId) return t;
+                const cat = flatCategories.find((c) => c.id === categoryId);
+                return {
+                  ...t,
+                  category_id: categoryId,
+                  category_name: cat?.name ?? null,
+                  label_clean: customLabel || t.label_clean,
+                  ai_confidence: "user",
+                };
+              }),
+            };
+          });
+        }
+      } catch {
+        setError("Erreur lors de la création de la règle.");
+      }
+    },
+    [flatCategories, fetchTransactions, fetchCashflow]
+  );
+
+  const handleApplyOnly = useCallback(
+    async (txnId: number, categoryId: number, customLabel?: string) => {
+      try {
+        await transactionService.update(txnId, {
+          category_id: categoryId,
+          custom_label: customLabel,
+          create_rule: false,
+        });
+        setData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            data: prev.data.map((t) => {
+              if (t.id !== txnId) return t;
+              const cat = flatCategories.find((c) => c.id === categoryId);
+              return {
+                ...t,
+                category_id: categoryId,
+                category_name: cat?.name ?? null,
+                label_clean: customLabel || t.label_clean,
+                ai_confidence: "user",
+              };
+            }),
+          };
+        });
+      } catch {
+        setError("Erreur lors de la mise à jour.");
+      }
+    },
+    [flatCategories]
+  );
+
+  const handleEditTransactionSave = useCallback(
+    async (
+      id: number,
+      data: { label_clean?: string; category_id?: number | null; notes?: string | null },
+    ) => {
+      await transactionService.update(id, {
+        ...data,
+        create_rule: false,
+      });
+      setData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          data: prev.data.map((t) => {
+            if (t.id !== id) return t;
+            const cat = data.category_id != null ? flatCategories.find((c) => c.id === data.category_id) : null;
+            return {
+              ...t,
+              label_clean: data.label_clean ?? t.label_clean,
+              category_id: data.category_id ?? t.category_id,
+              category_name: cat?.name ?? (data.category_id != null ? null : t.category_name),
+              notes: data.notes ?? t.notes,
+            };
+          }),
+        };
+      });
+    },
+    [flatCategories]
   );
 
   const accountMap = useMemo(
@@ -348,6 +462,7 @@ export default function TransactionsPage() {
         onChange={handleFilterChange}
         accounts={accounts}
         categories={categories}
+        onCategoryDropdownOpen={fetchCategories}
       />
 
       {/* Transaction table */}
@@ -405,6 +520,9 @@ export default function TransactionsPage() {
                     colWidths={colWidths}
                     flatCategories={flatCategories}
                     onCategoryChange={handleCategoryChange}
+                    onRequestRuleConfirm={setRuleModalPayload}
+                    onEditTransaction={setEditTransaction}
+                    onCategoryDropdownOpen={fetchCategories}
                   />
                 ))
               )}
@@ -447,6 +565,23 @@ export default function TransactionsPage() {
       </div>
 
       {importOpen && <ImportModal accounts={accounts} onClose={handleImportClose} />}
+
+      <CategoryRuleModal
+        open={!!ruleModalPayload}
+        onClose={() => setRuleModalPayload(null)}
+        payload={ruleModalPayload}
+        onCreateRule={handleCreateRule}
+        onApplyOnly={handleApplyOnly}
+      />
+
+      <EditTransactionModal
+        open={!!editTransaction}
+        onClose={() => setEditTransaction(null)}
+        transaction={editTransaction}
+        flatCategories={flatCategories}
+        onSave={handleEditTransactionSave}
+        onCategoryDropdownOpen={fetchCategories}
+      />
     </div>
   );
 }
@@ -550,12 +685,18 @@ function TransactionRow({
   colWidths,
   flatCategories,
   onCategoryChange,
+  onRequestRuleConfirm,
+  onEditTransaction,
+  onCategoryDropdownOpen,
 }: {
   txn: Transaction;
   accountName?: string;
   colWidths: number[];
   flatCategories: { id: number; name: string; parentName: string | null; depth: number }[];
   onCategoryChange: (txnId: number, categoryId: number | null, customLabel?: string) => void;
+  onRequestRuleConfirm: (payload: CategoryRuleModalPayload) => void;
+  onEditTransaction: (txn: Transaction) => void;
+  onCategoryDropdownOpen?: () => void;
 }) {
   const isCredit = txn.amount >= 0;
   const [editing, setEditing] = useState(false);
@@ -582,7 +723,14 @@ function TransactionRow({
 
   const handleConfirmCategory = () => {
     if (pendingCatId) {
-      onCategoryChange(txn.id, pendingCatId, customLabel || undefined);
+      const categoryName = flatCategories.find((c) => c.id === pendingCatId)?.name ?? "";
+      onRequestRuleConfirm({
+        txnId: txn.id,
+        categoryId: pendingCatId,
+        categoryName,
+        labelRaw: txn.label_raw,
+        customLabel,
+      });
     }
     setEditing(false);
     setPendingCatId(null);
@@ -596,7 +744,11 @@ function TransactionRow({
   };
 
   return (
-    <tr className="border-b last:border-0 hover:bg-muted/30 transition-colors group">
+    <tr
+      className="border-b last:border-0 hover:bg-muted/30 transition-colors group cursor-pointer"
+      onDoubleClick={() => onEditTransaction(txn)}
+      title="Double-clic pour modifier"
+    >
       {/* Date */}
       <td className="p-2 text-sm whitespace-nowrap" style={{ width: colWidths[0] }}>
         {formatDate(txn.date)}
@@ -626,6 +778,7 @@ function TransactionRow({
               className="w-full rounded border border-input bg-background px-1.5 py-0.5 text-xs"
               value={pendingCatId ?? txn.category_id ?? ""}
               onChange={handleCatSelect}
+              onFocus={() => onCategoryDropdownOpen?.()}
             >
               <option value="">— Aucune —</option>
               {flatCategories.map((cat) => (

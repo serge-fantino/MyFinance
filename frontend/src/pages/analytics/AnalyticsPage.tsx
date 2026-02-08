@@ -10,6 +10,8 @@ import {
   Treemap,
 } from "recharts";
 import { TransactionFilters, type FilterState } from "../transactions/TransactionFilters";
+import { EditTransactionModal, type EditTransactionPayload } from "../transactions/EditTransactionModal";
+import { CategoryRuleModal, type CategoryRuleModalPayload } from "../transactions/CategoryRuleModal";
 import {
   analyticsService,
   type CategoryBreakdown,
@@ -57,11 +59,15 @@ export default function AnalyticsPage() {
     search: "",
   });
 
+  const fetchCategories = useCallback(() => {
+    categoryService.list().then(setCategories).catch(() => {});
+  }, []);
+
   // ── Reference data ─────────────────────────────────
   useEffect(() => {
     accountService.list().then(setAccounts).catch(() => {});
-    categoryService.list().then(setCategories).catch(() => {});
-  }, []);
+    fetchCategories();
+  }, [fetchCategories]);
 
   // ── Fetch analytics ────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -136,6 +142,7 @@ export default function AnalyticsPage() {
         onChange={handleFilterChange}
         accounts={accounts}
         categories={categories}
+        onCategoryDropdownOpen={fetchCategories}
       />
 
       {/* KPIs */}
@@ -183,6 +190,8 @@ export default function AnalyticsPage() {
             filters={filters}
             categories={categories}
             onRefresh={fetchData}
+            onCategoryDropdownOpen={fetchCategories}
+            onEditModalOpen={fetchCategories}
           />
         </>
       )}
@@ -412,12 +421,16 @@ function DetailTable({
   filters,
   categories: rawCategories,
   onRefresh,
+  onCategoryDropdownOpen,
+  onEditModalOpen,
 }: {
   data: CategoryBreakdown[];
   grandTotal: number;
   filters: FilterState;
   categories: Category[];
   onRefresh: () => void;
+  onCategoryDropdownOpen?: () => void;
+  onEditModalOpen?: () => void;
 }) {
   const [expandedCatId, setExpandedCatId] = useState<number | null | "none">("none");
   const [detail, setDetail] = useState<LabelGroup[]>([]);
@@ -466,9 +479,7 @@ function DetailTable({
       await transactionService.update(txnId, {
         category_id: newCatId ?? undefined,
       });
-      // Refresh both the detail and the parent analytics
       onRefresh();
-      // Re-fetch expanded detail
       if (expandedCatId !== "none") {
         const catIdForRefresh = expandedCatId === null ? null : expandedCatId;
         const apiFilters: AnalyticsFilters = {};
@@ -482,6 +493,90 @@ function DetailTable({
     } catch {
       // ignore
     }
+  };
+
+  const [editTransaction, setEditTransaction] = useState<EditTransactionPayload | null>(null);
+  const [ruleModalPayload, setRuleModalPayload] = useState<CategoryRuleModalPayload | null>(null);
+
+  const openEditModal = useCallback(
+    (payload: EditTransactionPayload) => {
+      setEditTransaction(payload);
+      onEditModalOpen?.();
+    },
+    [onEditModalOpen]
+  );
+
+  const handleCreateRule = async (
+    txnId: number,
+    categoryId: number,
+    pattern: string,
+    customLabel?: string,
+  ) => {
+    try {
+      await transactionService.update(txnId, {
+        category_id: categoryId,
+        custom_label: customLabel,
+        create_rule: true,
+        rule_pattern: pattern,
+      });
+      onRefresh();
+      if (expandedCatId !== "none") {
+        const catIdForRefresh = expandedCatId === null ? null : expandedCatId;
+        const apiFilters: AnalyticsFilters = {};
+        if (filters.accountId) apiFilters.account_id = parseInt(filters.accountId);
+        if (filters.dateFrom) apiFilters.date_from = filters.dateFrom;
+        if (filters.dateTo) apiFilters.date_to = filters.dateTo;
+        if (filters.direction) apiFilters.direction = filters.direction as "income" | "expense";
+        const result = await analyticsService.categoryDetail(catIdForRefresh, apiFilters);
+        setDetail(result);
+      }
+    } catch {
+      // ignore
+    }
+    setRuleModalPayload(null);
+  };
+
+  const handleApplyOnly = async (txnId: number, categoryId: number, customLabel?: string) => {
+    try {
+      await transactionService.update(txnId, {
+        category_id: categoryId,
+        custom_label: customLabel,
+        create_rule: false,
+      });
+      onRefresh();
+      if (expandedCatId !== "none") {
+        const catIdForRefresh = expandedCatId === null ? null : expandedCatId;
+        const apiFilters: AnalyticsFilters = {};
+        if (filters.accountId) apiFilters.account_id = parseInt(filters.accountId);
+        if (filters.dateFrom) apiFilters.date_from = filters.dateFrom;
+        if (filters.dateTo) apiFilters.date_to = filters.dateTo;
+        if (filters.direction) apiFilters.direction = filters.direction as "income" | "expense";
+        const result = await analyticsService.categoryDetail(catIdForRefresh, apiFilters);
+        setDetail(result);
+      }
+    } catch {
+      // ignore
+    }
+    setRuleModalPayload(null);
+  };
+
+  const handleEditSave = async (
+    id: number,
+    data: { label_clean?: string; category_id?: number | null; notes?: string | null },
+  ) => {
+    await transactionService.update(id, { ...data, create_rule: false });
+    onRefresh();
+    if (expandedCatId !== "none") {
+      const catIdForRefresh = expandedCatId === null ? null : expandedCatId;
+      const apiFilters: AnalyticsFilters = {};
+      if (filters.accountId) apiFilters.account_id = parseInt(filters.accountId);
+      if (filters.dateFrom) apiFilters.date_from = filters.dateFrom;
+      if (filters.dateTo) apiFilters.date_to = filters.dateTo;
+      if (filters.direction) apiFilters.direction = filters.direction as "income" | "expense";
+      const result = await analyticsService.categoryDetail(catIdForRefresh, apiFilters);
+      setDetail(result);
+    }
+    setEditTransaction(null);
   };
 
   return (
@@ -575,6 +670,9 @@ function DetailTable({
                               group={grp}
                               flatCategories={flatCategories}
                               onCategoryChange={handleCategoryChange}
+                              onEditTransaction={openEditModal}
+                              onRequestRuleConfirm={setRuleModalPayload}
+                              onCategoryDropdownOpen={onCategoryDropdownOpen}
                             />
                           ))}
                         </div>
@@ -600,6 +698,23 @@ function DetailTable({
           </tr>
         </tfoot>
       </table>
+
+      <EditTransactionModal
+        open={!!editTransaction}
+        onClose={() => setEditTransaction(null)}
+        transaction={editTransaction}
+        flatCategories={flatCategories}
+        onSave={handleEditSave}
+        onCategoryDropdownOpen={onCategoryDropdownOpen}
+      />
+
+      <CategoryRuleModal
+        open={!!ruleModalPayload}
+        onClose={() => setRuleModalPayload(null)}
+        payload={ruleModalPayload}
+        onCreateRule={handleCreateRule}
+        onApplyOnly={handleApplyOnly}
+      />
     </div>
   );
 }
@@ -612,10 +727,16 @@ function LabelGroupRow({
   group,
   flatCategories,
   onCategoryChange,
+  onEditTransaction,
+  onRequestRuleConfirm,
+  onCategoryDropdownOpen,
 }: {
   group: LabelGroup;
   flatCategories: { id: number; name: string; depth: number }[];
   onCategoryChange: (txnId: number, catId: number | null) => void;
+  onEditTransaction: (txn: EditTransactionPayload) => void;
+  onRequestRuleConfirm: (payload: CategoryRuleModalPayload) => void;
+  onCategoryDropdownOpen?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -651,6 +772,9 @@ function LabelGroupRow({
               txn={txn}
               flatCategories={flatCategories}
               onCategoryChange={onCategoryChange}
+              onEditTransaction={onEditTransaction}
+              onRequestRuleConfirm={onRequestRuleConfirm}
+              onCategoryDropdownOpen={onCategoryDropdownOpen}
             />
           ))}
         </div>
@@ -667,44 +791,143 @@ function TransactionDetailRow({
   txn,
   flatCategories,
   onCategoryChange,
+  onEditTransaction,
+  onRequestRuleConfirm,
+  onCategoryDropdownOpen,
 }: {
   txn: { id: number; date: string; label_raw: string; label_clean: string | null; amount: number; currency: string; category_id: number | null; ai_confidence: string | null };
   flatCategories: { id: number; name: string; depth: number }[];
   onCategoryChange: (txnId: number, catId: number | null) => void;
+  onEditTransaction: (txn: EditTransactionPayload) => void;
+  onRequestRuleConfirm: (payload: CategoryRuleModalPayload) => void;
+  onCategoryDropdownOpen?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [pendingCatId, setPendingCatId] = useState<number | null>(null);
+  const [customLabel, setCustomLabel] = useState("");
+
+  const hasClean = txn.label_clean && txn.label_clean.trim() !== "" && txn.label_clean !== txn.label_raw;
+
+  const handleDoubleClick = () => {
+    onEditTransaction({
+      id: txn.id,
+      label_raw: txn.label_raw,
+      label_clean: txn.label_clean,
+      category_id: txn.category_id,
+      notes: null,
+      amount: txn.amount,
+      currency: txn.currency,
+      date: txn.date,
+    });
+  };
+
+  const handleCatSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = e.target.value ? parseInt(e.target.value) : null;
+    if (val) {
+      setPendingCatId(val);
+    } else {
+      onCategoryChange(txn.id, null);
+      setEditing(false);
+    }
+  };
+
+  const handleConfirmCategory = () => {
+    if (pendingCatId) {
+      const categoryName = flatCategories.find((c) => c.id === pendingCatId)?.name ?? "";
+      onRequestRuleConfirm({
+        txnId: txn.id,
+        categoryId: pendingCatId,
+        categoryName,
+        labelRaw: txn.label_raw,
+        customLabel,
+      });
+    }
+    setEditing(false);
+    setPendingCatId(null);
+    setCustomLabel("");
+  };
+
+  const handleCancelEdit = () => {
+    setEditing(false);
+    setPendingCatId(null);
+    setCustomLabel("");
+  };
 
   return (
-    <div className="flex items-center gap-3 px-10 py-1.5 text-xs hover:bg-muted/20 transition-colors border-t border-dashed border-muted">
+    <div
+      className="flex items-center gap-3 px-10 py-1.5 text-xs hover:bg-muted/20 transition-colors border-t border-dashed border-muted cursor-pointer"
+      onDoubleClick={handleDoubleClick}
+      title="Double-clic pour modifier"
+    >
       <span className="text-muted-foreground w-20 flex-shrink-0 tabular-nums">
         {formatDate(txn.date)}
       </span>
-      <span className="flex-1 truncate text-muted-foreground" title={txn.label_raw}>
-        {txn.label_clean || txn.label_raw}
-      </span>
-      {/* Category reassignment */}
-      <span className="w-36 flex-shrink-0">
+      <div className="flex-1 min-w-0">
+        {hasClean ? (
+          <>
+            <span className="font-medium block truncate" title={txn.label_clean ?? undefined}>
+              {txn.label_clean}
+            </span>
+            <span className="text-muted-foreground text-[11px] block truncate" title={txn.label_raw}>
+              {txn.label_raw}
+            </span>
+          </>
+        ) : (
+          <span className="text-muted-foreground truncate block" title={txn.label_raw}>
+            {txn.label_raw}
+          </span>
+        )}
+      </div>
+      {/* Category reassignment — même flux que page Transactions : libellé + modale confirmation */}
+      <span className="w-48 flex-shrink-0">
         {editing ? (
-          <select
-            autoFocus
-            className="w-full rounded border border-input bg-background px-1 py-0.5 text-[11px]"
-            value={txn.category_id ?? ""}
-            onChange={(e) => {
-              const val = e.target.value ? parseInt(e.target.value) : null;
-              onCategoryChange(txn.id, val);
-              setEditing(false);
-            }}
-            onBlur={() => setEditing(false)}
-          >
-            <option value="">— Aucune —</option>
-            {flatCategories.map((cat) => (
-              <option key={cat.id} value={cat.id}>
-                {"\u00A0\u00A0".repeat(cat.depth)}{cat.name}
-              </option>
-            ))}
-          </select>
+          <div className="space-y-1">
+            <select
+              autoFocus
+              className="w-full rounded border border-input bg-background px-1 py-0.5 text-[11px]"
+              value={pendingCatId ?? txn.category_id ?? ""}
+              onChange={handleCatSelect}
+              onFocus={() => onCategoryDropdownOpen?.()}
+            >
+              <option value="">— Aucune —</option>
+              {flatCategories.map((cat) => (
+                <option key={cat.id} value={cat.id}>
+                  {"\u00A0\u00A0".repeat(cat.depth)}{cat.name}
+                </option>
+              ))}
+            </select>
+            {pendingCatId != null && (
+              <>
+                <input
+                  type="text"
+                  placeholder="Libellé (ex: Salaire Serge)"
+                  value={customLabel}
+                  onChange={(e) => setCustomLabel(e.target.value)}
+                  className="w-full rounded border border-input bg-background px-1 py-0.5 text-[11px]"
+                  onKeyDown={(e) => e.key === "Enter" && handleConfirmCategory()}
+                />
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={handleConfirmCategory}
+                    className="flex-1 rounded bg-primary px-1.5 py-0.5 text-[10px] text-primary-foreground hover:bg-primary/90"
+                  >
+                    OK
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancelEdit}
+                    className="flex-1 rounded border px-1.5 py-0.5 text-[10px] hover:bg-muted"
+                  >
+                    Annuler
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         ) : (
           <button
+            type="button"
             onClick={() => setEditing(true)}
             className="text-[11px] text-primary hover:underline truncate block w-full text-left"
             title="Changer la catégorie"

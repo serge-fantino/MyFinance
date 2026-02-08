@@ -4,14 +4,17 @@
 
 /**
  * Format a number as currency.
+ * Coerces to number and uses 0 when value is not finite (avoids "NaN €").
  */
 export function formatCurrency(amount: number, currency = "EUR", locale = "fr-FR"): string {
+  const n = Number(amount);
+  const value = Number.isFinite(n) ? n : 0;
   return new Intl.NumberFormat(locale, {
     style: "currency",
     currency,
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(amount);
+  }).format(value);
 }
 
 /**

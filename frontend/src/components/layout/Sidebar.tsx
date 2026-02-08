@@ -1,6 +1,9 @@
+import { useState, useEffect, useCallback } from "react";
 import { NavLink } from "react-router-dom";
 import { cn } from "../../utils/cn";
 import { useUIStore } from "../../store/ui.store";
+import { categoryService } from "../../services/category.service";
+import type { Category } from "../../types/category.types";
 
 interface NavItem {
   label: string;
@@ -56,51 +59,194 @@ const navItems: NavItem[] = [
   },
 ];
 
+const categoriesIcon = (
+  <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 6h.008v.008H6V6z" />
+  </svg>
+);
+
 export function Sidebar() {
   const { sidebarOpen } = useUIStore();
+  const [categoriesOpen, setCategoriesOpen] = useState(true);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [addingToParentId, setAddingToParentId] = useState<number | null>(null);
+  const [newSubName, setNewSubName] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const fetchCategories = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await categoryService.list();
+      setCategories(data);
+    } catch {
+      setCategories([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (categoriesOpen && sidebarOpen) fetchCategories();
+  }, [categoriesOpen, sidebarOpen, fetchCategories]);
+
+  const toggleExpanded = (id: number) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleAddSub = async (parentId: number) => {
+    const name = newSubName.trim();
+    if (!name) return;
+    try {
+      await categoryService.create({ name, parent_id: parentId });
+      setNewSubName("");
+      setAddingToParentId(null);
+      await fetchCategories();
+      setExpandedIds((prev) => new Set(prev).add(parentId));
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleAddRoot = async () => {
+    const name = newSubName.trim();
+    if (!name) return;
+    try {
+      await categoryService.create({ name });
+      setNewSubName("");
+      setAddingToParentId(null);
+      await fetchCategories();
+    } catch {
+      // ignore
+    }
+  };
 
   return (
     <aside
       className={cn(
-        "fixed left-0 top-0 z-40 h-screen border-r bg-card transition-all duration-300",
+        "fixed left-0 top-0 z-40 flex h-screen flex-col border-r bg-card transition-all duration-300",
         sidebarOpen ? "w-64" : "w-16"
       )}
     >
       {/* Logo */}
-      <div className="flex h-16 items-center border-b px-4">
+      <div className="flex h-16 shrink-0 items-center border-b px-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm shrink-0">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
             MF
           </div>
           {sidebarOpen && <span className="text-lg font-semibold">MyFinance</span>}
         </div>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 p-3 space-y-1">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.href}
-            to={item.href}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                isActive
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                !sidebarOpen && "justify-center px-2"
-              )
-            }
-            title={!sidebarOpen ? item.label : undefined}
-          >
-            {item.icon}
-            {sidebarOpen && <span>{item.label}</span>}
-          </NavLink>
-        ))}
-      </nav>
+      {/* Nav + Categories : nav en haut, panel catégories occupe le reste avec scroll */}
+      <div className="flex min-h-0 flex-1 flex-col p-3">
+        {/* Navigation */}
+        <nav className="shrink-0 space-y-1">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.href}
+              to={item.href}
+              className={({ isActive }) =>
+                cn(
+                  "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                  isActive
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                  !sidebarOpen && "justify-center px-2"
+                )
+              }
+              title={!sidebarOpen ? item.label : undefined}
+            >
+              {item.icon}
+              {sidebarOpen && <span>{item.label}</span>}
+            </NavLink>
+          ))}
+        </nav>
+
+        {/* Accordion Catégories — occupe la place restante, scroll si trop long */}
+        {sidebarOpen && (
+          <div className="mt-3 flex min-h-0 flex-1 flex-col border-t pt-3">
+            <button
+              type="button"
+              onClick={() => setCategoriesOpen(!categoriesOpen)}
+              className="flex w-full shrink-0 items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+            >
+              {categoriesIcon}
+              <span>Catégories</span>
+              <svg
+                className={cn("ml-auto w-4 h-4 transition-transform", categoriesOpen && "rotate-180")}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {categoriesOpen && (
+              <div className="mt-1 flex min-h-0 flex-1 flex-col overflow-y-auto pl-1">
+                <div className="space-y-0.5">
+                {loading ? (
+                  <p className="px-3 py-2 text-xs text-muted-foreground">Chargement…</p>
+                ) : (
+                  <>
+                    {categories.map((cat) => (
+                      <CategoryNode
+                        key={cat.id}
+                        category={cat}
+                        depth={0}
+                        expandedIds={expandedIds}
+                        onToggle={toggleExpanded}
+                        addingToParentId={addingToParentId}
+                        newSubName={newSubName}
+                        setNewSubName={setNewSubName}
+                        onStartAdd={setAddingToParentId}
+                        onAddSub={handleAddSub}
+                        onAddRoot={handleAddRoot}
+                      />
+                    ))}
+                    {addingToParentId === null && (
+                      <div className="flex items-center gap-1 px-3 py-1">
+                        <input
+                          type="text"
+                          placeholder="Nouvelle catégorie (racine)"
+                          value={newSubName}
+                          onChange={(e) => setNewSubName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleAddRoot();
+                            if (e.key === "Escape") setNewSubName("");
+                          }}
+                          className="flex-1 min-w-0 rounded border border-input bg-background px-2 py-1 text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => newSubName.trim() && handleAddRoot()}
+                          className="shrink-0 rounded p-1 text-primary hover:bg-primary/10"
+                          title="Ajouter à la racine"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                          </svg>
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Settings at bottom */}
-      <div className="absolute bottom-0 left-0 right-0 p-3 border-t">
+      <div className="shrink-0 p-3 border-t">
         <NavLink
           to="/settings"
           className={({ isActive }) =>
@@ -122,5 +268,132 @@ export function Sidebar() {
         </NavLink>
       </div>
     </aside>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Category tree node (recursive)
+// ---------------------------------------------------------------------------
+
+interface CategoryNodeProps {
+  category: Category;
+  depth: number;
+  expandedIds: Set<number>;
+  onToggle: (id: number) => void;
+  addingToParentId: number | null;
+  newSubName: string;
+  setNewSubName: (v: string) => void;
+  onStartAdd: (parentId: number | null) => void;
+  onAddSub: (parentId: number, name: string) => void;
+  onAddRoot: () => void;
+}
+
+function CategoryNode({
+  category,
+  depth,
+  expandedIds,
+  onToggle,
+  addingToParentId,
+  newSubName,
+  setNewSubName,
+  onStartAdd,
+  onAddSub,
+  onAddRoot,
+}: CategoryNodeProps) {
+  const hasChildren = category.children && category.children.length > 0;
+  const isExpanded = expandedIds.has(category.id);
+  const isAddingHere = addingToParentId === category.id;
+
+  return (
+    <div className="space-y-0.5">
+      <div
+        className={cn(
+          "flex items-center gap-1 rounded px-2 py-1 text-xs group",
+          depth > 0 && "ml-3"
+        )}
+        style={depth > 0 ? { paddingLeft: `${8 + depth * 12}px` } : undefined}
+      >
+        <button
+          type="button"
+          onClick={() => hasChildren && onToggle(category.id)}
+          className="shrink-0 p-0.5 rounded hover:bg-muted"
+        >
+          {hasChildren ? (
+            <svg
+              className={cn("w-3.5 h-3.5 text-muted-foreground transition-transform", isExpanded && "rotate-90")}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          ) : (
+            <span className="w-3.5 inline-block" />
+          )}
+        </button>
+        <span className={cn("flex-1 truncate", category.is_system && "text-muted-foreground")}>
+          {category.name}
+        </span>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onStartAdd(category.id);
+            setNewSubName("");
+          }}
+          className="shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-primary/10 text-primary"
+          title="Ajouter une sous-catégorie"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Inline add sub-category */}
+      {isAddingHere && (
+        <div className="flex items-center gap-1 pl-6 py-1" style={depth > 0 ? { paddingLeft: `${14 + depth * 12}px` } : undefined}>
+          <input
+            type="text"
+            placeholder="Nom de la sous-catégorie"
+            value={newSubName}
+            onChange={(e) => setNewSubName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onAddSub(category.id, newSubName.trim());
+              if (e.key === "Escape") onStartAdd(null);
+            }}
+            autoFocus
+            className="flex-1 min-w-0 rounded border border-input bg-background px-2 py-1 text-xs"
+          />
+          <button
+            type="button"
+            onClick={() => newSubName.trim() && onAddSub(category.id, newSubName.trim())}
+            className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium bg-primary text-primary-foreground hover:bg-primary/90"
+          >
+            Ajouter
+          </button>
+        </div>
+      )}
+
+      {isExpanded && hasChildren && category.children && (
+        <div className="space-y-0.5">
+          {category.children.map((child) => (
+            <CategoryNode
+              key={child.id}
+              category={child}
+              depth={depth + 1}
+              expandedIds={expandedIds}
+              onToggle={onToggle}
+              addingToParentId={addingToParentId}
+              newSubName={newSubName}
+              setNewSubName={setNewSubName}
+              onStartAdd={onStartAdd}
+              onAddSub={onAddSub}
+              onAddRoot={onAddRoot}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

@@ -24,7 +24,9 @@ class TransactionUpdate(BaseModel):
     notes: str | None = None
     tags: list[str] | None = None
     label_clean: str | None = None
-    custom_label: str | None = None  # Creates/updates a classification rule with this label
+    custom_label: str | None = None  # Used when creating a rule (label_clean for matched txns)
+    create_rule: bool = True  # If False, only update this transaction; no rule created
+    rule_pattern: str | None = None  # When create_rule=True: pattern for the rule (default: label_raw)
 
 
 class TransactionResponse(BaseModel):

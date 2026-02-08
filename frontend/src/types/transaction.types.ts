@@ -36,6 +36,8 @@ export interface TransactionUpdate {
   tags?: string[];
   label_clean?: string;
   custom_label?: string;
+  create_rule?: boolean;
+  rule_pattern?: string;
 }
 
 export interface TransactionFilter {
