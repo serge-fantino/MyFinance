@@ -130,9 +130,11 @@ class AnalyticsService:
         date_to: date | None = None,
         direction: str | None = None,
     ) -> list[dict]:
-        """Get transactions for a category, grouped by label_raw.
+        """Get transactions for a category, grouped by effective label.
 
-        Returns list of { label, total, count, transactions: [...] }.
+        Effective label = label_clean when set (non-empty), else label_raw.
+        This groups transactions with the same custom label (e.g. "Salaire Serge")
+        even when raw labels differ.
         """
         user_accounts = select(Account.id).where(Account.user_id == user.id)
         base_clauses = self._base_filters(user_accounts, account_id, date_from, date_to, direction)
@@ -142,29 +144,38 @@ class AnalyticsService:
         else:
             base_clauses.append(Transaction.category_id.is_(None))
 
-        # Group by label_raw
+        # Effective label: prefer label_clean when set, else label_raw
+        effective_label = func.coalesce(
+            func.nullif(func.trim(Transaction.label_clean), ""),
+            Transaction.label_raw,
+        )
+
         group_query = (
             select(
-                Transaction.label_raw,
+                effective_label.label("effective_label"),
                 func.sum(Transaction.amount).label("total"),
                 func.count(Transaction.id).label("count"),
             )
             .where(*base_clauses)
-            .group_by(Transaction.label_raw)
+            .group_by(effective_label)
             .order_by(func.abs(func.sum(Transaction.amount)).desc())
         )
         result = await self.db.execute(group_query)
         groups = result.all()
 
-        # For each group, fetch actual transactions
         entries = []
         for grp in groups:
+            # Fetch transactions where effective label equals this group's key
+            txn_filter = (
+                func.coalesce(
+                    func.nullif(func.trim(Transaction.label_clean), ""),
+                    Transaction.label_raw,
+                )
+                == grp.effective_label
+            )
             txn_query = (
                 select(Transaction)
-                .where(
-                    *base_clauses,
-                    Transaction.label_raw == grp.label_raw,
-                )
+                .where(*base_clauses, txn_filter)
                 .order_by(Transaction.date.desc())
                 .limit(50)
             )
@@ -172,7 +183,7 @@ class AnalyticsService:
             txns = txn_result.scalars().all()
 
             entries.append({
-                "label": grp.label_raw,
+                "label": grp.effective_label or "",
                 "total": float(grp.total),
                 "count": grp.count,
                 "transactions": [

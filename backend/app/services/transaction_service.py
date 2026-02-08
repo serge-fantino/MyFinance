@@ -294,30 +294,34 @@ class TransactionService:
         txn = await self._get_user_transaction(transaction_id, user)
         update_data = data.model_dump(exclude_unset=True)
 
-        # Extract custom_label before applying to transaction fields
+        # Extract fields that are not direct transaction columns
         custom_label = update_data.pop("custom_label", None)
+        create_rule = update_data.pop("create_rule", True)
+        rule_pattern = update_data.pop("rule_pattern", None)
 
         rule_applied_count = 0
 
-        # Handle manual category assignment → create rule + apply
+        # Handle manual category assignment
         if "category_id" in update_data and update_data["category_id"] is not None:
             txn.ai_confidence = "user"
 
-            # Create/update a classification rule
-            rule_service = RuleService(self.db)
-            rule = await rule_service.create_rule_from_transaction(
-                user=user,
-                label_raw=txn.label_raw,
-                category_id=update_data["category_id"],
-                custom_label=custom_label,
-            )
-
-            # If custom_label was provided, also set it on this transaction
-            if custom_label:
-                txn.label_clean = custom_label
-
-            # Apply the new rule to other matching uncategorized transactions
-            rule_applied_count = await rule_service.apply_single_rule(rule, user)
+            if create_rule:
+                # Create/update a classification rule (pattern = rule_pattern or label_raw)
+                rule_service = RuleService(self.db)
+                rule = await rule_service.create_rule_from_transaction(
+                    user=user,
+                    label_raw=txn.label_raw,
+                    category_id=update_data["category_id"],
+                    custom_label=custom_label,
+                    pattern_override=rule_pattern,
+                )
+                if custom_label:
+                    txn.label_clean = custom_label
+                rule_applied_count = await rule_service.apply_single_rule(rule, user)
+            else:
+                # Only update this transaction
+                if custom_label:
+                    txn.label_clean = custom_label
 
         for key, value in update_data.items():
             setattr(txn, key, value)

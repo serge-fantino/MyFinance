@@ -74,7 +74,11 @@ export default function AccountsPage() {
     if (refreshNeeded) fetchAccounts();
   };
 
-  const totalBalance = accounts.reduce((sum, a) => sum + (a.current_balance ?? 0), 0);
+  const totalBalance = accounts.reduce(
+    (sum, a) => sum + Number(a.current_balance ?? 0),
+    0
+  );
+  const totalDisplay = Number.isFinite(totalBalance) ? totalBalance : 0;
 
   return (
     <div className="space-y-6">
@@ -95,22 +99,26 @@ export default function AccountsPage() {
 
       {error && <Alert variant="destructive">{error}</Alert>}
 
-      {/* Total balance */}
-      {accounts.length > 0 && (
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Solde total</p>
-                <p className={`text-3xl font-bold ${totalBalance >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-                  {formatCurrency(totalBalance)}
+      {/* Total global — toujours affiché */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">Solde total (tous les comptes)</p>
+              {loading ? (
+                <div className="h-9 w-32 rounded bg-muted animate-pulse mt-1" />
+              ) : (
+                <p className={`text-3xl font-bold ${totalDisplay >= 0 ? "text-foreground" : "text-red-600"}`}>
+                  {formatCurrency(totalDisplay)}
                 </p>
-              </div>
-              <p className="text-sm text-muted-foreground">{accounts.length} compte(s) actif(s)</p>
+              )}
             </div>
-          </CardContent>
-        </Card>
-      )}
+            <p className="text-sm text-muted-foreground">
+              {loading ? "—" : `${accounts.length} compte(s) actif(s)`}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Account list */}
       {loading ? (
@@ -176,8 +184,8 @@ export default function AccountsPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                <p className={`text-2xl font-bold ${(account.current_balance ?? 0) >= 0 ? "text-foreground" : "text-red-600"}`}>
-                  {formatCurrency(account.current_balance ?? 0, account.currency)}
+                <p className={`text-2xl font-bold ${Number(account.current_balance ?? 0) >= 0 ? "text-foreground" : "text-red-600"}`}>
+                  {formatCurrency(Number(account.current_balance ?? 0), account.currency)}
                 </p>
                 <div className="flex items-center gap-2 mt-2 text-sm text-muted-foreground">
                   <span>{TYPE_LABELS[account.type] || account.type}</span>

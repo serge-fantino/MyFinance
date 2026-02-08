@@ -206,14 +206,14 @@ class RuleService:
         label_raw: str,
         category_id: int,
         custom_label: str | None = None,
+        pattern_override: str | None = None,
     ) -> ClassificationRule:
         """Create a rule from a manual transaction classification.
 
-        Extracts a reasonable pattern from the label and creates a 'contains' rule.
-        If a matching rule already exists, updates it instead.
+        Uses pattern_override if provided, else label_raw. If a rule with the same
+        pattern already exists, updates it instead.
         """
-        # Normalize the pattern: use the full label
-        pattern = label_raw.strip()
+        pattern = (pattern_override or label_raw).strip()
 
         # Check if a rule with the same pattern already exists
         result = await self.db.execute(

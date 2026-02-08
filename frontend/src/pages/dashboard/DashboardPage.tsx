@@ -1,8 +1,65 @@
+import { useEffect, useState, useMemo } from "react";
 import { useAuth } from "../../hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/Card";
+import { accountService } from "../../services/account.service";
+import { transactionService } from "../../services/transaction.service";
+import { formatCurrency } from "../../utils/format";
+import type { AccountSummary } from "../../types/account.types";
+import type { CashflowMonthly } from "../../types/transaction.types";
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const [summary, setSummary] = useState<AccountSummary | null>(null);
+  const [cashflowMonthly, setCashflowMonthly] = useState<CashflowMonthly[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setLoading(true);
+      try {
+        const [summaryRes, cashflowRes] = await Promise.all([
+          accountService.getSummary(),
+          transactionService.getCashflowMonthly(),
+        ]);
+        if (!cancelled) {
+          setSummary(summaryRes);
+          setCashflowMonthly(cashflowRes);
+        }
+      } catch {
+        if (!cancelled) {
+          setSummary(null);
+          setCashflowMonthly([]);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const currentMonthKey = useMemo(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    return `${y}-${m}`;
+  }, []);
+
+  const currentMonthCashflow = useMemo(
+    () => cashflowMonthly.find((c) => c.month === currentMonthKey),
+    [cashflowMonthly, currentMonthKey]
+  );
+
+  const totalBalance = summary?.total_balance ?? 0;
+  const accountCount = summary?.total_accounts ?? 0;
+  const monthIncome = currentMonthCashflow?.income ?? 0;
+  const monthExpenses = currentMonthCashflow?.expenses ?? 0;
+
+  const monthLabel = useMemo(() => {
+    const d = new Date();
+    return d.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -12,7 +69,7 @@ export default function DashboardPage() {
           Bonjour, {user?.full_name?.split(" ")[0]} !
         </h1>
         <p className="text-muted-foreground mt-1">
-          Voici un apercu de vos finances.
+          Voici un aperçu de vos finances.
         </p>
       </div>
 
@@ -26,8 +83,18 @@ export default function DashboardPage() {
             </svg>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">---.-- EUR</div>
-            <p className="text-xs text-muted-foreground">Aucun compte configure</p>
+            {loading ? (
+              <div className="h-8 w-24 rounded bg-muted animate-pulse" />
+            ) : (
+              <>
+                <div className={`text-2xl font-bold ${totalBalance >= 0 ? "text-foreground" : "text-red-600"}`}>
+                  {formatCurrency(totalBalance)}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {accountCount === 0 ? "Aucun compte configuré" : `${accountCount} compte(s) actif(s)`}
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -39,21 +106,41 @@ export default function DashboardPage() {
             </svg>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-emerald-600">+0.00 EUR</div>
-            <p className="text-xs text-muted-foreground">Importez vos releves</p>
+            {loading ? (
+              <div className="h-8 w-24 rounded bg-muted animate-pulse" />
+            ) : (
+              <>
+                <div className="text-2xl font-bold text-emerald-600">
+                  +{formatCurrency(monthIncome)}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {monthLabel}
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Depenses du mois</CardTitle>
+            <CardTitle className="text-sm font-medium">Dépenses du mois</CardTitle>
             <svg className="h-4 w-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M2.25 6L9 12.75l4.286-4.286a11.948 11.948 0 014.306 6.43l.776 2.898m0 0l3.182-5.511m-3.182 5.51l-5.511-3.181" />
             </svg>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-600">-0.00 EUR</div>
-            <p className="text-xs text-muted-foreground">Importez vos releves</p>
+            {loading ? (
+              <div className="h-8 w-24 rounded bg-muted animate-pulse" />
+            ) : (
+              <>
+                <div className="text-2xl font-bold text-red-600">
+                  -{formatCurrency(monthExpenses)}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {monthLabel}
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -65,55 +152,65 @@ export default function DashboardPage() {
             </svg>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">0</div>
-            <p className="text-xs text-muted-foreground">Ajoutez votre premier compte</p>
+            {loading ? (
+              <div className="h-8 w-12 rounded bg-muted animate-pulse" />
+            ) : (
+              <>
+                <div className="text-2xl font-bold">{accountCount}</div>
+                <p className="text-xs text-muted-foreground">
+                  {accountCount === 0 ? "Ajoutez votre premier compte" : "compte(s) actif(s)"}
+                </p>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Getting started guide */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Pour commencer</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <div className="flex items-start gap-4">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold text-sm">
-                1
+      {/* Getting started guide (only when no data) */}
+      {!loading && accountCount === 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Pour commencer</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex items-start gap-4">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold text-sm">
+                  1
+                </div>
+                <div>
+                  <p className="font-medium">Ajoutez un compte bancaire</p>
+                  <p className="text-sm text-muted-foreground">
+                    Rendez-vous dans la section &quot;Comptes&quot; pour ajouter votre premier compte.
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="font-medium">Ajoutez un compte bancaire</p>
-                <p className="text-sm text-muted-foreground">
-                  Rendez-vous dans la section "Comptes" pour ajouter votre premier compte.
-                </p>
+              <div className="flex items-start gap-4">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold text-sm">
+                  2
+                </div>
+                <div>
+                  <p className="font-medium">Importez vos transactions</p>
+                  <p className="text-sm text-muted-foreground">
+                    Exportez un relevé CSV ou Excel depuis votre banque et importez-le.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-4">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold text-sm">
+                  3
+                </div>
+                <div>
+                  <p className="font-medium">Laissez l&apos;IA travailler</p>
+                  <p className="text-sm text-muted-foreground">
+                    Les transactions sont automatiquement classifiées. Vos tableaux de bord se remplissent.
+                  </p>
+                </div>
               </div>
             </div>
-            <div className="flex items-start gap-4">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold text-sm">
-                2
-              </div>
-              <div>
-                <p className="font-medium">Importez vos transactions</p>
-                <p className="text-sm text-muted-foreground">
-                  Exportez un releve CSV ou Excel depuis votre banque et importez-le.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-4">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold text-sm">
-                3
-              </div>
-              <div>
-                <p className="font-medium">Laissez l'IA travailler</p>
-                <p className="text-sm text-muted-foreground">
-                  Les transactions sont automatiquement classifiees. Vos tableaux de bord se remplissent.
-                </p>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

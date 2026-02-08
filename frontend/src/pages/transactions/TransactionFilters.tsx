@@ -17,6 +17,8 @@ interface TransactionFiltersProps {
   onChange: (patch: Partial<FilterState>) => void;
   accounts: Account[];
   categories: Category[];
+  /** Appelé à l’ouverture du menu catégorie pour rafraîchir la liste (ex. après modification dans la sidebar). */
+  onCategoryDropdownOpen?: () => void;
 }
 
 export function TransactionFilters({
@@ -24,6 +26,7 @@ export function TransactionFilters({
   onChange,
   accounts,
   categories,
+  onCategoryDropdownOpen,
 }: TransactionFiltersProps) {
   // Flatten categories for select
   const flatCategories = useMemo(() => {
@@ -122,6 +125,7 @@ export function TransactionFilters({
         <select
           value={filters.categoryId}
           onChange={(e) => onChange({ categoryId: e.target.value })}
+          onFocus={() => onCategoryDropdownOpen?.()}
           className={`${selectClass} w-44`}
         >
           <option value="">Toutes catégories</option>
