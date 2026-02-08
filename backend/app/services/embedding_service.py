@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.account import Account
+from app.services.label_parser import get_embedding_text
 from app.models.category import Category
 from app.models.transaction import Transaction
 from app.models.user import User
@@ -65,13 +66,20 @@ class EmbeddingService:
         return embeddings.tolist()
 
     @staticmethod
-    def _build_embedding_text(label_raw: str, amount_sign: str) -> str:
-        """Build the enriched text to embed for a transaction.
+    def _build_embedding_text(
+        label_raw: str, amount_sign: str, parsed_metadata: dict | None = None
+    ) -> str:
+        """Build the text to embed for a transaction.
 
-        Combines the raw label with a direction tag to help distinguish
-        income vs expense transactions with similar labels.
+        Uses the cleaned counterparty from parsed_metadata when available,
+        since the counterparty is the most semantically relevant part.
+        Falls back to the full label_raw otherwise.
+
+        A direction tag [income/expense] is appended to help distinguish
+        transactions with similar labels but different natures.
         """
-        return f"{label_raw} [{amount_sign}]"
+        base_text = get_embedding_text(parsed_metadata, label_raw)
+        return f"{base_text} [{amount_sign}]"
 
     # ── Ensure embeddings exist ─────────────────────────
 
@@ -103,7 +111,9 @@ class EmbeddingService:
         texts = []
         for txn in transactions:
             direction = "income" if txn.amount >= 0 else "expense"
-            texts.append(self._build_embedding_text(txn.label_raw, direction))
+            texts.append(
+                self._build_embedding_text(txn.label_raw, direction, txn.parsed_metadata)
+            )
 
         # Compute embeddings in batch
         embeddings = self.compute_embeddings_batch(texts)
@@ -412,10 +422,16 @@ class EmbeddingService:
             cluster_embs = embeddings[indices]
             centroid = cluster_embs.mean(axis=0).reshape(1, -1)
 
-            # Representative label: most frequent label_raw in cluster
+            # Representative label: prefer counterparty from parsed metadata
             label_counts: dict[str, int] = {}
             for txn in cluster_txns:
-                label_counts[txn.label_raw] = label_counts.get(txn.label_raw, 0) + 1
+                counterparty = (
+                    txn.parsed_metadata.get("counterparty")
+                    if txn.parsed_metadata
+                    else None
+                )
+                display_label = counterparty or txn.label_raw
+                label_counts[display_label] = label_counts.get(display_label, 0) + 1
             representative_label = max(label_counts, key=label_counts.get)
 
             # Suggest category for the cluster centroid

@@ -11,6 +11,7 @@ import type {
   ComputeEmbeddingsResult,
   ImportResult,
   PaginatedTransactions,
+  ParseLabelsResult,
   Transaction,
   TransactionCreate,
   TransactionFilter,
@@ -65,7 +66,15 @@ export const transactionService = {
     return response.data;
   },
 
-  // ── Embedding-based classification ──────────────────
+  // ── Label parsing & embedding classification ───────
+
+  async parseLabels(accountId?: number, force = false): Promise<ParseLabelsResult> {
+    const params: Record<string, unknown> = {};
+    if (accountId) params.account_id = accountId;
+    if (force) params.force = true;
+    const response = await api.post("/transactions/parse-labels", null, { params });
+    return response.data;
+  },
 
   async computeEmbeddings(accountId?: number): Promise<ComputeEmbeddingsResult> {
     const response = await api.post("/transactions/compute-embeddings", null, {

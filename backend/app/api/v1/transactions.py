@@ -5,9 +5,11 @@ from decimal import Decimal
 
 import structlog
 from fastapi import APIRouter, Depends, File, Query, UploadFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
+from app.models.transaction import Transaction
 from app.models.user import User
 from app.schemas.transaction import (
     ClusterClassifyRequest,
@@ -16,6 +18,7 @@ from app.schemas.transaction import (
     ComputeEmbeddingsResult,
     ImportResult,
     PaginatedResponse,
+    ParseLabelsResult,
     TransactionCreate,
     TransactionResponse,
     TransactionUpdate,
@@ -87,6 +90,58 @@ async def get_cashflow(
 
 
 # ── Embedding-based classification endpoints ─────────────
+
+
+@router.post("/parse-labels", response_model=ParseLabelsResult)
+async def parse_labels(
+    account_id: int | None = None,
+    force: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Parse raw labels to extract structured metadata (counterparty, card, etc.).
+
+    Runs the label parser on existing transactions that haven't been parsed yet.
+    Use force=true to re-parse all transactions (useful after parser improvements).
+
+    Parsed transactions will have their embeddings reset so they are recomputed
+    using the cleaned counterparty text on the next embedding computation.
+    """
+    from app.models.account import Account
+    from app.services.label_parser import parse_label
+
+    user_accounts = select(Account.id).where(Account.user_id == current_user.id)
+    query = select(Transaction).where(
+        Transaction.account_id.in_(user_accounts),
+        Transaction.deleted_at.is_(None),
+    )
+    if account_id:
+        query = query.where(Transaction.account_id == account_id)
+    if not force:
+        query = query.where(Transaction.parsed_metadata.is_(None))
+
+    result = await db.execute(query)
+    transactions = list(result.scalars().all())
+
+    parsed_count = 0
+    for txn in transactions:
+        metadata = parse_label(txn.label_raw)
+        txn.parsed_metadata = metadata
+        # Reset embedding so it gets recomputed with cleaned counterparty text
+        txn.embedding = None
+        parsed_count += 1
+
+    await db.flush()
+
+    logger.info(
+        "labels_parsed",
+        user_id=current_user.id,
+        parsed=parsed_count,
+        total=len(transactions),
+        force=force,
+    )
+
+    return {"parsed": parsed_count, "total": len(transactions)}
 
 
 @router.post("/compute-embeddings", response_model=ComputeEmbeddingsResult)

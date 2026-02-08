@@ -112,6 +112,7 @@ class TransactionService:
                 "tags": txn.tags,
                 "source": txn.source,
                 "ai_confidence": txn.ai_confidence,
+                "parsed_metadata": txn.parsed_metadata,
                 "created_at": txn.created_at,
             }
             if txn.category_id:
@@ -351,6 +352,7 @@ class TransactionService:
             "tags": txn.tags,
             "source": txn.source,
             "ai_confidence": txn.ai_confidence,
+            "parsed_metadata": txn.parsed_metadata,
             "created_at": txn.created_at,
             "rule_applied_count": rule_applied_count,
         }

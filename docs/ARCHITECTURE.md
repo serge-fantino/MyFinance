@@ -37,7 +37,7 @@
 │       │              │              │               │         │
 │  ┌────┴──────────────┴──────────────┴───────────────┴─────┐  │
 │  │                  Service Layer                          │  │
-│  │  AuthService │ AccountService │ ImportService │ EmbeddingSvc│
+│  │  AuthService│AccountService│ImportService│LabelParser│EmbeddingSvc│
 │  └────┬──────────────┴──────────────┴───────────────┬─────┘  │
 │       │                                             │         │
 └───────┼─────────────────────────────────────────────┼────────┘
@@ -137,12 +137,12 @@
        ┌──────────┐    └──────────────────┘       │ dedup_hash       │
        │categories│                                │ source           │
        ├──────────┤                                │ ai_confidence    │
-       │id (PK)   │◀──────────────────────────────│ embedding        │ ← vector(384)
-       │user_id   │                                │ created_at       │
-       │name      │                                │ updated_at       │
-       │parent_id │    ┌──────────────────┐        │ deleted_at       │
-       │icon      │    │  conversations   │        └──────────────────┘
-       │color     │    ├──────────────────┤
+       │id (PK)   │◀──────────────────────────────│ parsed_metadata  │ ← JSONB
+       │user_id   │                                │ embedding        │ ← vector(384)
+       │name      │                                │ created_at       │
+       │parent_id │    ┌──────────────────┐        │ updated_at       │
+       │icon      │    │  conversations   │        │ deleted_at       │
+       │color     │    ├──────────────────┤        └──────────────────┘
        │is_system │    │ id (PK)          │        ┌──────────────────┐
        │created_at│    │ user_id (FK)     │        │    messages      │
        └─────┬────┘    │ title            │        ├──────────────────┤
@@ -239,6 +239,7 @@ CREATE INDEX idx_transactions_embedding ON transactions USING hnsw (embedding ve
 │   ├── GET    /                  # Liste (paginée, filtrable)
 │   ├── POST   /                  # Créer manuellement
 │   ├── GET    /cashflow          # Données cashflow (mensuel/journalier)
+│   ├── POST   /parse-labels       # Parser les libellés → métadonnées structurées
 │   ├── POST   /compute-embeddings # Calculer les embeddings manquants (local)
 │   ├── GET    /clusters          # Clusters de transactions similaires + suggestions
 │   ├── POST   /clusters/classify # Classifier un cluster de transactions
@@ -347,6 +348,7 @@ backend/
 │   │   ├── import_service.py
 │   │   ├── category_service.py
 │   │   ├── analytics_service.py
+│   │   ├── label_parser.py        # Parsing des libellés bancaires (regex)
 │   │   ├── embedding_service.py  # Classification par embeddings (local)
 │   │   └── ai_service.py         # OpenAI (désactivé)
 │   │

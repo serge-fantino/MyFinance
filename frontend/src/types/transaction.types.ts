@@ -1,3 +1,13 @@
+export interface ParsedMetadata {
+  payment_mode: string | null;
+  payment_type: string | null;  // card, transfer, direct_debit, atm, check, fee, etc.
+  counterparty: string | null;
+  card_id: string | null;
+  operation_date: string | null; // ISO date
+  check_number: string | null;
+  raw_details: string | null;
+}
+
 export interface Transaction {
   id: number;
   account_id: number;
@@ -14,6 +24,7 @@ export interface Transaction {
   tags: string[] | null;
   source: string;
   ai_confidence: string | null;
+  parsed_metadata: ParsedMetadata | null;
   created_at: string;
 }
 
@@ -137,4 +148,9 @@ export interface ClusterClassifyRequest {
 export interface ClusterClassifyResult {
   classified_count: number;
   rule_created: boolean;
+}
+
+export interface ParseLabelsResult {
+  parsed: number;
+  total: number;
 }

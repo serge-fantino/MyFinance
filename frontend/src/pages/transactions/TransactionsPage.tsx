@@ -215,9 +215,11 @@ export default function TransactionsPage() {
       setClusterLoading(true);
       setError(null);
       const accountIdParam = filters.accountId ? parseInt(filters.accountId) : undefined;
-      // Step 1: compute missing embeddings
+      // Step 1: parse labels for transactions missing metadata
+      await transactionService.parseLabels(accountIdParam);
+      // Step 2: compute missing embeddings (uses cleaned counterparty)
       await transactionService.computeEmbeddings(accountIdParam);
-      // Step 2: fetch clusters with suggestions
+      // Step 3: fetch clusters with suggestions
       const result = await transactionService.getClusters(accountIdParam);
       if (result.total_uncategorized === 0) {
         setError("Toutes les transactions sont deja classees.");
@@ -692,6 +694,20 @@ function ResizableHeader({
 // Transaction row
 // ---------------------------------------------------------------------------
 
+const PAYMENT_MODE_SHORT: Record<string, string> = {
+  card: "CB",
+  transfer: "VIR",
+  transfer_in: "VIR",
+  direct_debit: "PRLV",
+  atm: "DAB",
+  check: "CHQ",
+  check_deposit: "CHQ",
+  fee: "FRAIS",
+  subscription: "ABO",
+  refund: "REMB",
+  credit: "AVOIR",
+};
+
 const CONFIDENCE_BADGE: Record<string, { label: string; className: string }> = {
   high: { label: "IA", className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400" },
   medium: { label: "IA", className: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400" },
@@ -774,12 +790,24 @@ function TransactionRow({
       <td className="p-2 text-sm whitespace-nowrap" style={{ width: colWidths[0] }}>
         {formatDate(txn.date)}
       </td>
-      {/* Label — full text, wraps */}
+      {/* Label — with parsed metadata */}
       <td className="p-2" style={{ width: colWidths[1] }}>
-        <p className="text-sm font-medium break-words whitespace-pre-wrap leading-snug">
-          {txn.label_clean || txn.label_raw}
-        </p>
-        {txn.label_clean && txn.label_clean !== txn.label_raw && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {txn.parsed_metadata?.payment_mode && (
+            <span className="inline-flex items-center rounded px-1 py-0 text-[10px] font-medium bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 shrink-0">
+              {PAYMENT_MODE_SHORT[txn.parsed_metadata.payment_type ?? ""] ?? txn.parsed_metadata.payment_mode}
+            </span>
+          )}
+          <span className="text-sm font-medium break-words whitespace-pre-wrap leading-snug">
+            {txn.label_clean || txn.parsed_metadata?.counterparty || txn.label_raw}
+          </span>
+          {txn.parsed_metadata?.card_id && (
+            <span className="inline-flex items-center rounded px-1 py-0 text-[10px] text-muted-foreground bg-muted shrink-0">
+              {txn.parsed_metadata.card_id.slice(-4)}
+            </span>
+          )}
+        </div>
+        {(txn.label_clean || txn.parsed_metadata?.counterparty) && (
           <p className="text-xs text-muted-foreground mt-0.5 break-words">{txn.label_raw}</p>
         )}
         {txn.notes && (

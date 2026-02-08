@@ -11,6 +11,7 @@ from app.core.exceptions import NotFoundError, ValidationError
 from app.models.account import Account
 from app.models.transaction import ImportLog, Transaction
 from app.models.user import User
+from app.services.label_parser import parse_label
 from app.utils.file_parsers import (
     ParsedTransaction,
     parse_csv,
@@ -103,10 +104,14 @@ class ImportService:
                 if pt.memo and pt.memo != label:
                     label_raw = f"{label} — {pt.memo}"
 
+                # Parse structured metadata from the raw label
+                parsed_metadata = parse_label(label_raw)
+
                 txn = Transaction(
                     account_id=account_id,
                     date=pt.date,
                     label_raw=label_raw,
+                    parsed_metadata=parsed_metadata,
                     amount=pt.amount,
                     currency=account.currency,
                     dedup_hash=dedup_hash,

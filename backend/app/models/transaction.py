@@ -29,6 +29,7 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
     dedup_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False)  # import_csv, import_excel, manual
     ai_confidence: Mapped[str | None] = mapped_column(String(10), nullable=True)  # high, medium, low, rule, user, embedding
+    parsed_metadata: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)  # structured label metadata
     embedding = mapped_column(Vector(384), nullable=True)  # sentence-transformers embedding
 
     # Relationships

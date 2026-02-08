@@ -45,6 +45,7 @@ class TransactionResponse(BaseModel):
     tags: list[str] | None = None
     source: str
     ai_confidence: str | None = None
+    parsed_metadata: dict | None = None
     created_at: datetime
     rule_applied_count: int | None = None  # Only set after a category update
 
@@ -128,3 +129,9 @@ class ClusterClassifyResult(BaseModel):
     """Result of classifying a cluster of transactions."""
     classified_count: int
     rule_created: bool
+
+
+class ParseLabelsResult(BaseModel):
+    """Result of parsing labels for existing transactions."""
+    parsed: int
+    total: int
