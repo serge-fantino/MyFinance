@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     embedding_boost_keywords: str = ""
     embedding_boost_repeat: int = 2
 
+    # Local LLM via Ollama (for cluster classification)
+    llm_enabled: bool = True
+    llm_base_url: str = "http://localhost:11434"
+    llm_model: str = "mistral"
+    llm_timeout: float = 60.0  # seconds per request
+
     # CORS
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 

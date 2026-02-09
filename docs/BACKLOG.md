@@ -142,6 +142,20 @@
 | 7c.6 | UI affichage métadonnées | P0 | M | ✅ Done | Badge mode de paiement + tiers nettoyé + carte dans la liste des transactions |
 | 7c.7 | Documentation | P0 | S | ✅ Done | Mise à jour SPECS, ARCHITECTURE, BACKLOG, EMBEDDING_CLASSIFICATION |
 
+### Epic 7d : Classification par LLM local (Ollama)
+
+> Remplacement de la suggestion par sémantique des catégories (naïve) par un LLM local via Ollama.
+
+| # | Ticket | Priorité | Taille | Statut | Description |
+|---|--------|----------|--------|--------|-------------|
+| 7d.1 | Service Ollama Docker | P0 | S | ✅ Done | Ajout d'Ollama dans docker-compose.dev.yml et docker-compose.yml |
+| 7d.2 | LLM service | P0 | L | ✅ Done | `llm_service.py` : client Ollama, prompt structuré, parsing réponse JSON |
+| 7d.3 | Descriptions enrichies catégories | P0 | M | ✅ Done | `category_descriptions.py` : descriptions riches avec mots-clés et exemples de marchands |
+| 7d.4 | Intégration dans EmbeddingService | P0 | M | ✅ Done | Remplacement de `_suggest_from_categories` par appel LLM dans `get_clusters()` |
+| 7d.5 | Configuration LLM | P0 | S | ✅ Done | Settings : `llm_enabled`, `llm_base_url`, `llm_model`, `llm_timeout` |
+| 7d.6 | UI explication LLM | P0 | S | ✅ Done | Affichage de l'explication LLM et du badge "IA locale" dans ClusterReviewModal |
+| 7d.7 | Documentation | P0 | S | ✅ Done | Mise à jour EMBEDDING_CLASSIFICATION, SPECS, ARCHITECTURE, BACKLOG |
+
 ### Epic 8 : Dashboard
 
 | # | Ticket | Priorité | Taille | Statut | Description |
@@ -249,7 +263,7 @@
 | 1 | 1-2 | Setup + Auth | 14 | Fondations, authentification |
 | 2 | 3-4 | Comptes + Transactions + Import | 17 | Données de base, import CSV/Excel |
 | 3 | 5-6 | Catégorisation + Dashboard | 14 | Classification IA, visualisations |
-| 3b | — | Embeddings (remplace OpenAI) | 9 | Classification locale par embeddings, clustering |
+| 3b | — | Embeddings + LLM local | 9+7+7 | Classification locale : embeddings, parsing libellés, LLM Ollama |
 | 4 | 7-8 | Analyses + Chat IA | 10 | Analyses avancées, assistant IA |
 | 5 | 9-10 | Polish + Déploiement | 12 | Qualité, sécurité, production |
 | **Total MVP** | **10 semaines** | **13 epics** | **67 tickets** | |

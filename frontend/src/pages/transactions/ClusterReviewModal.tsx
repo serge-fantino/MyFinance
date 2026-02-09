@@ -21,8 +21,8 @@ const CONFIDENCE_COLORS: Record<string, string> = {
 };
 
 const SOURCE_LABELS: Record<string, string> = {
-  similar_transactions: "Similarite avec transactions classees",
-  category_semantics: "Semantique de la categorie",
+  similar_transactions: "Similarite",
+  llm: "IA locale",
 };
 
 export function ClusterReviewModal({
@@ -284,6 +284,11 @@ function ClusterCard({
                 </span>
               )}
             </div>
+          )}
+          {cluster.suggestion_explanation && (
+            <p className="text-[10px] text-muted-foreground mt-0.5 italic">
+              {cluster.suggestion_explanation}
+            </p>
           )}
         </div>
         <button

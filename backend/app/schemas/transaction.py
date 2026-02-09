@@ -108,7 +108,8 @@ class TransactionCluster(BaseModel):
     suggested_category_name: str | None = None
     suggestion_confidence: str | None = None  # high, medium, low
     suggestion_similarity: float | None = None
-    suggestion_source: str | None = None  # similar_transactions, category_semantics
+    suggestion_source: str | None = None  # similar_transactions, llm
+    suggestion_explanation: str | None = None  # LLM explanation (when source=llm)
 
 
 class ClustersResponse(BaseModel):
