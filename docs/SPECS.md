@@ -250,13 +250,15 @@ La classification IA a été remplacée par un système local basé sur des embe
 - Pour chaque transaction non classée, recherche des K=5 transactions classées les plus proches par similarité cosinus
 - Si la similarité dépasse le seuil → suggestion de la catégorie la plus fréquente parmi les voisins
 
-**Suggestion par sémantique des catégories :**
-- Les noms de catégories sont aussi projetés dans l'espace d'embeddings (`"Dépenses > Alimentation"`)
-- Si aucun voisin classé n'est assez proche → comparaison directe avec les embeddings des catégories
+**Suggestion par LLM local (Ollama + Mistral) :**
+- Si aucun voisin classé n'est assez proche → le LLM local classifie le cluster
+- Le LLM reçoit les catégories enrichies (avec descriptions, mots-clés, exemples de marchands) et les transactions du cluster
+- Retourne une catégorie, un niveau de confiance, et une explication en langage naturel
+- Le LLM a la connaissance du monde nécessaire (ex: "LECLERC" = supermarché = Alimentation)
 
-**Clustering HDBSCAN :**
-- Les transactions non classées sont regroupées en clusters par similarité
-- Chaque cluster reçoit une suggestion de catégorie (par voisinage ou sémantique)
+**Clustering :**
+- Les transactions non classées sont regroupées en clusters par similarité cosinus
+- Chaque cluster reçoit une suggestion de catégorie (par k-NN ou par LLM)
 - L'utilisateur décide d'accepter, modifier ou ignorer chaque suggestion
 
 **Principes :**
@@ -266,7 +268,7 @@ La classification IA a été remplacée par un système local basé sur des embe
 - L'utilisateur peut corriger → cela crée/met à jour une règle (feedback loop durable)
 - Les corrections enrichissent automatiquement les suggestions futures (via similarité)
 
-**Intégration OpenAI** : désactivée au profit du système local. Peut être réactivée comme couche complémentaire.
+**Intégration OpenAI** : désactivée au profit du système local (embeddings + LLM Ollama). Tout tourne en local sans dépendance externe.
 
 ### 3.6 Tableau de bord
 

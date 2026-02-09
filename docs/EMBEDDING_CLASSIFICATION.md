@@ -21,8 +21,8 @@ Les libellés bancaires présentent des défis spécifiques :
 
 1. **Regrouper** automatiquement les transactions similaires (même origine, même type) sans écrire de règles manuelles
 2. **Proposer** une classification par défaut à l'utilisateur, basée sur :
-   - Les transactions déjà classées par l'utilisateur (apprentissage par similarité)
-   - La sémantique a priori des catégories (projection dans l'espace d'embeddings)
+   - Les transactions déjà classées par l'utilisateur (apprentissage par similarité k-NN)
+   - Un LLM local (Ollama + Mistral) pour le cold-start et les cas ambigus
 3. **Laisser le choix** : l'utilisateur valide ou rejette chaque suggestion
 4. **Scalabilité** : supporter plusieurs milliers de transactions sans GPU ni API externe
 
@@ -80,32 +80,32 @@ Les libellés bancaires présentent des défis spécifiques :
               │                         │
               ▼                         ▼
 ┌──────────────────────────┐  ┌───────────────────────────────────┐
-│  3a. Suggestion par       │  │  3b. Clustering HDBSCAN            │
-│      voisinage            │  │                                    │
-│                           │  │  Regroupe les transactions non     │
-│  Pour chaque transaction  │  │  classées par similarité           │
-│  non classée, cherche les │  │                                    │
-│  K plus proches voisins   │  │  Chaque cluster = un groupe de     │
-│  CLASSÉS par l'utilisateur│  │  transactions similaires avec :    │
-│                           │  │  - Un label représentatif          │
-│  Si similarité > seuil :  │  │  - Un nombre de transactions       │
-│  → suggère la catégorie   │  │  - Une catégorie suggérée          │
-│  du voisin le plus proche │  │    (par voisinage ou sémantique)   │
+│  3a. Suggestion k-NN      │  │  3b. Clustering                    │
+│      (voisinage)          │  │      AgglomerativeClustering       │
+│                           │  │                                    │
+│  Pour chaque transaction  │  │  Regroupe les transactions non     │
+│  non classée, cherche les │  │  classées par similarité cosinus   │
+│  K plus proches voisins   │  │                                    │
+│  CLASSÉS par l'utilisateur│  │  Chaque cluster = un groupe de     │
+│                           │  │  transactions similaires avec :    │
+│  Si similarité > seuil :  │  │  - Un label représentatif          │
+│  → suggère la catégorie   │  │  - Un nombre de transactions       │
+│  du voisin le plus proche │  │  - Une catégorie suggérée          │
 └──────────────────────────┘  └───────────────────────────────────┘
               │                         │
               └────────────┬────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  4. Suggestion par sémantique des catégories                     │
+│  4. Classification par LLM local (Ollama + Mistral)              │
 │                                                                  │
-│  Les catégories sont aussi projetées dans l'espace d'embeddings  │
-│  "Dépenses > Alimentation" → vecteur 384d                       │
-│  "Revenus > Salaire" → vecteur 384d                             │
+│  Pour les clusters sans match k-NN (cold-start) :               │
+│  → Le LLM reçoit le label du cluster + les catégories enrichies │
+│    (avec descriptions, mots-clés, exemples de marchands)         │
+│  → Retourne : catégorie, confiance, explication                  │
 │                                                                  │
-│  Si aucun voisin classé n'est assez proche :                     │
-│  → compare l'embedding de la transaction aux embeddings          │
-│    des catégories → suggestion "sémantique"                      │
+│  Le LLM a la connaissance du monde nécessaire pour associer      │
+│  "PARK TRIVAUX" à Transport ou "LECLERC" à Alimentation.        │
 └──────────────────────────┬──────────────────────────────────────┘
                            │
                            ▼
@@ -182,21 +182,41 @@ CREATE INDEX idx_transactions_embedding ON transactions
 - Pas de service externe (pas de Pinecone, Weaviate, etc.)
 - S'intègre naturellement dans l'architecture PostgreSQL existante
 
-### 2.4 Embeddings des catégories
+### 2.4 Classification LLM locale (Ollama)
 
-Les catégories sont aussi projetées dans l'espace d'embeddings pour permettre une suggestion sémantique a priori (sans données d'entraînement utilisateur).
+Pour le cold-start (aucune transaction classée) et les cas où le k-NN ne suffit pas, un **LLM local** est utilisé via **Ollama**.
 
-**Texte embedé pour chaque catégorie :**
+**Architecture :**
+- **Ollama** tourne comme service Docker (`ollama/ollama:latest`, port 11434)
+- **Modèle** : Mistral 7B (configurable via `LLM_MODEL`)
+- **Communication** : API HTTP REST (`/api/generate`)
+- **Temps de réponse** : ~2-10s par cluster sur CPU
+
+**Prompt structuré :**
+Le LLM reçoit un prompt contenant :
+1. L'arbre complet des catégories avec des **descriptions enrichies** (mots-clés, exemples de marchands)
+2. Le label représentatif du cluster
+3. Quelques transactions d'exemple du cluster (label, montant, date)
+
+**Descriptions enrichies des catégories :**
+Au lieu d'envoyer simplement "Dépenses > Alimentation", le prompt inclut des descriptions riches :
 ```
-"{parent_name} > {category_name}"
-```
-Exemples :
-- `"Revenus > Salaire"` → embedding
-- `"Dépenses > Alimentation"` → embedding
-- `"Dépenses > Transport"` → embedding
-- `"Transferts > Virement entre comptes"` → embedding
+Alimentation — Courses alimentaires, supermarché, épicerie, boulangerie,
+restaurant, fast-food, Leclerc, Carrefour, Auchan, Lidl, Monoprix, McDo...
 
-Les embeddings de catégories sont calculés à la demande et mis en cache en mémoire.
+Transport — Essence, carburant, péage, parking, SNCF, RATP, Navigo,
+taxi, Uber, entretien auto, Total, Shell, Vinci, autoroute, Indigo...
+```
+
+**Réponse attendue :** JSON avec `category_id`, `confidence` (high/medium/low), `explanation`.
+
+**Avantages vs embedding sémantique :**
+- Le LLM a la **connaissance du monde** : il sait que "LECLERC" est un supermarché
+- Les noms propres de marchands sont correctement classifiés
+- L'explication en langage naturel aide l'utilisateur à comprendre la suggestion
+- Pas besoin de maintenir une liste exhaustive de marchands
+
+**Fallback gracieux :** si Ollama n'est pas disponible, les clusters restent sans suggestion (l'utilisateur peut toujours choisir manuellement).
 
 **Suggestion par distance à la catégorie la plus proche :**  
 Pour proposer une catégorie, on calcule la similarité cosinus entre l’embedding de la transaction (ou du centroïde du cluster) et l’embedding de chaque catégorie feuille, puis on choisit la **catégorie la plus proche** (similarité maximale). Quand cette similarité dépasse `embedding_category_prefer_threshold` (défaut 0,62), cette suggestion est **prioritaire** sur le k-NN des transactions déjà classées, ce qui améliore la cohérence avec le vocabulaire des catégories.
@@ -235,17 +255,21 @@ Pour chaque transaction non classée :
    - Confiance = similarité du voisin le plus proche
 3. Si aucun voisin classé assez proche → fallback sur la suggestion sémantique
 
-### 3.3 Suggestion par sémantique des catégories
+### 3.3 Suggestion par LLM local
 
-Pour les transactions sans voisin classé suffisamment proche :
+Pour les clusters sans voisin classé suffisamment proche :
 
-1. Comparer l'embedding de la transaction à chaque embedding de catégorie
-2. Trouver la catégorie la plus proche
-3. Si la similarité ≥ 0.40 (seuil plus bas car les catégories sont des concepts abstraits) :
-   - Suggérer cette catégorie
-   - Confiance = basée sur la similarité, plafonnée à `medium`
+1. Construire un prompt structuré avec le label du cluster, les transactions d'exemple, et les catégories enrichies
+2. Envoyer au LLM via Ollama (`POST /api/generate`)
+3. Parser la réponse JSON : `{category_id, confidence, explanation}`
+4. Valider que le `category_id` existe bien dans la liste des catégories
 
-### 3.4 Clustering (HDBSCAN)
+**Ordre de priorité des stratégies :**
+1. **k-NN** (fast path, ~1ms) → quand des transactions classées similaires existent
+2. **LLM** (cold-start, ~5s) → quand le k-NN n'a pas de match suffisant
+3. **Aucune suggestion** → si le LLM n'est pas disponible ou ne peut pas classifier
+
+### 3.4 Clustering (AgglomerativeClustering)
 
 Pour regrouper les transactions similaires et présenter des clusters à l'utilisateur :
 
@@ -258,15 +282,11 @@ Pour regrouper les transactions similaires et présenter des clusters à l'utili
 4. Pour chaque cluster trouvé :
    - Calculer le centroïde (moyenne des embeddings)
    - Trouver le label le plus fréquent (label représentatif)
-   - Appliquer suggestion par voisinage sur le centroïde
-   - Si pas de voisin → suggestion par sémantique des catégories
+   - Appliquer suggestion par voisinage (k-NN) sur le centroïde
+   - Si pas de voisin → suggestion par LLM local
 5. Trier les clusters par nombre de transactions (décroissant)
 
-**Pourquoi HDBSCAN :**
-- Pas besoin de spécifier le nombre de clusters
-- Gère les clusters de densité variable
-- Identifie le bruit (transactions isolées)
-- Disponible dans scikit-learn ≥ 1.3
+**Note :** L'implémentation utilise `AgglomerativeClustering` (scikit-learn) avec matrice de distance cosinus pré-calculée et un seuil de distance configurable. Cela offre des clusters plus stables que HDBSCAN pour les petits jeux de données.
 
 ---
 
@@ -290,9 +310,10 @@ Le système d'embeddings **complète** le moteur de règles sans le remplacer :
 |-------|--------|-----------|---------------|
 | Règle utilisateur | `rule` | haute | Oui |
 | ~~Classification OpenAI~~ | ~~`high/medium/low`~~ | ~~variable~~ | ~~Oui~~ |
-| Suggestion embedding | `embedding` | variable | **Non** → l'utilisateur valide |
+| Suggestion embedding (k-NN) | `embedding` | variable | **Non** → l'utilisateur valide |
+| Suggestion LLM local | `llm` | variable | **Non** → l'utilisateur valide |
 
-L'intégration OpenAI est **désactivée** au profit des embeddings locaux. Elle pourra être réactivée ultérieurement comme couche complémentaire si nécessaire.
+L'intégration OpenAI est **désactivée** au profit des embeddings + LLM local. Tout tourne localement, sans dépendance à une API cloud.
 
 ### 4.3 Feedback loop
 
@@ -310,6 +331,11 @@ Le cercle vertueux : plus l'utilisateur classifie → plus les suggestions sont 
 ### 5.1 Nouveaux endpoints
 
 ```
+POST /api/v1/transactions/parse-labels
+  → Parse les libellés bruts pour extraire les métadonnées structurées
+  → Query params : account_id (optionnel), force (défaut false)
+  → Réponse : { parsed: int, total: int }
+
 POST /api/v1/transactions/compute-embeddings
   → Calcule les embeddings manquants pour les transactions de l'utilisateur
   → Query params : account_id (optionnel)
@@ -331,9 +357,10 @@ POST /api/v1/transactions/clusters/classify
 
 Le endpoint `POST /transactions/import` est modifié :
 1. Import des transactions (inchangé)
-2. Application des règles (inchangé)
-3. ~~Classification OpenAI~~ → **Calcul des embeddings** (nouveau)
-4. Les suggestions sont disponibles via `GET /transactions/clusters`
+2. **Parsing des libellés** → extraction des métadonnées structurées (nouveau)
+3. Application des règles (inchangé)
+4. ~~Classification OpenAI~~ → **Calcul des embeddings** sur le counterparty nettoyé (nouveau)
+5. Les suggestions sont disponibles via `GET /transactions/clusters` (k-NN + LLM)
 
 ---
 
@@ -357,6 +384,22 @@ Le endpoint `POST /transactions/import` est modifié :
 | `pgvector` | Type `vector`, opérateurs de distance, index HNSW |
 
 L'image Docker est remplacée par `pgvector/pgvector:pg16` (Debian-based, drop-in replacement de `postgres:16` avec l'extension pgvector pré-installée).
+
+### 6.3 Ollama (LLM local)
+
+| Composant | Détails |
+|-----------|---------|
+| Image Docker | `ollama/ollama:latest` |
+| Port | 11434 |
+| Modèle par défaut | `mistral` (7B) |
+| Alternatives | `llama3.1`, `phi3`, `gemma2` |
+| Téléchargement modèle | `docker exec ollama ollama pull mistral` |
+| RAM nécessaire | ~4-6 GB pour Mistral 7B |
+
+**Premier lancement :** après `docker compose up ollama`, télécharger le modèle :
+```bash
+docker exec -it ollama ollama pull mistral
+```
 
 ---
 
@@ -383,6 +426,7 @@ L'image Docker est remplacée par `pgvector/pgvector:pg16` (Debian-based, drop-i
 ### 7.3 Évolutions possibles
 
 - **Fine-tuning** : entraîner un modèle spécialisé sur les libellés bancaires français
-- **Hybride** : combiner embeddings + OpenAI pour les cas ambigus
+- **Modèle LLM plus grand** : passer à Llama 3.1 70B (avec GPU) pour de meilleures classifications
 - **Index HNSW** : activer l'index pgvector pour les utilisateurs avec > 10k transactions
 - **Embeddings incrémentaux** : ne recalculer que les embeddings des nouvelles transactions (déjà implémenté)
+- **Cache LLM** : mettre en cache les réponses LLM par label représentatif pour éviter de re-classifier les mêmes clusters

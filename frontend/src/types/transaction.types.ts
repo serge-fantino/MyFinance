@@ -130,7 +130,8 @@ export interface TransactionCluster {
   suggested_category_name: string | null;
   suggestion_confidence: string | null; // high, medium, low
   suggestion_similarity: number | null;
-  suggestion_source: string | null;     // similar_transactions, category_semantics
+  suggestion_source: string | null;     // similar_transactions, llm
+  suggestion_explanation: string | null; // LLM explanation (when source=llm)
 }
 
 export interface ClustersResponse {

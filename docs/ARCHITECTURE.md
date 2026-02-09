@@ -43,16 +43,16 @@
 └───────┼─────────────────────────────────────────────┼────────┘
         │                                             │
         ▼                                             ▼
-┌───────────────┐  ┌───────────┐            ┌────────────────┐
-│  PostgreSQL   │  │   Redis   │            │  sentence-     │
-│  16 + pgvector│  │     7     │            │  transformers  │
-│               │  │           │            │  (local CPU)   │
-│  - Users      │  │  - Cache  │            │                │
-│  - Accounts   │  │  - Queue  │            │  - Embeddings  │
-│  - Txns       │  │  - Sessions│           │  - Clustering  │
-│  - Vectors    │  │           │            │  - Similarity  │
-│  - Categories │  │           │            │                │
-└───────────────┘  └───────────┘            └────────────────┘
+┌───────────────┐  ┌───────────┐  ┌────────────────┐  ┌──────────┐
+│  PostgreSQL   │  │   Redis   │  │  sentence-     │  │  Ollama  │
+│  16 + pgvector│  │     7     │  │  transformers  │  │  (LLM)   │
+│               │  │           │  │  (local CPU)   │  │          │
+│  - Users      │  │  - Cache  │  │                │  │ Mistral  │
+│  - Accounts   │  │  - Queue  │  │  - Embeddings  │  │ 7B       │
+│  - Txns       │  │  - Sessions│ │  - Clustering  │  │          │
+│  - Vectors    │  │           │  │  - Similarity  │  │ :11434   │
+│  - Categories │  │           │  │                │  │          │
+└───────────────┘  └───────────┘  └────────────────┘  └──────────┘
 ```
 
 ---
@@ -88,7 +88,8 @@
 | IA (désactivé) | **LangChain** + **OpenAI SDK** | Abstraction LLM, chaînes de prompts (désactivé) |
 | Embeddings | **sentence-transformers** | Embeddings multilingual locaux (CPU) |
 | Vecteurs | **pgvector** | Extension PostgreSQL pour similarité vectorielle |
-| Clustering | **scikit-learn** (HDBSCAN) | Regroupement de transactions similaires |
+| Clustering | **scikit-learn** (AgglomerativeClustering) | Regroupement de transactions similaires |
+| LLM local | **Ollama** + **Mistral 7B** | Classification de clusters par IA locale |
 | Import fichiers | **openpyxl** (Excel) + **ofxparse** | Parsing des formats financiers |
 | Tâches async | **ARQ** (Redis-based) | File d'attente légère, async native |
 | Tests | **pytest** + **httpx** | Tests async, fixtures |
@@ -350,6 +351,8 @@ backend/
 │   │   ├── analytics_service.py
 │   │   ├── label_parser.py        # Parsing des libellés bancaires (regex)
 │   │   ├── embedding_service.py  # Classification par embeddings (local)
+│   │   ├── llm_service.py        # Classification par LLM local (Ollama)
+│   │   ├── category_descriptions.py # Descriptions enrichies des catégories
 │   │   └── ai_service.py         # OpenAI (désactivé)
 │   │
 │   └── utils/                  # Utilitaires

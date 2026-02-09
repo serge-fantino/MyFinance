@@ -4,8 +4,9 @@ Uses sentence-transformers (local, no GPU required) to compute embeddings
 for transaction labels, then uses cosine similarity and AgglomerativeClustering
 to group similar transactions and suggest categories.
 
-Category names are also projected into the embedding space to provide
-semantic suggestions even without user-classified reference data.
+Category suggestions use two strategies:
+1. k-NN: find similar already-classified transactions (fast, accurate when data exists)
+2. Local LLM via Ollama: classify using world knowledge (robust cold-start)
 """
 
 import numpy as np
@@ -184,6 +185,43 @@ class EmbeddingService:
 
         return leaf_cats
 
+    # ── Enriched categories for LLM ─────────────────────
+
+    async def _get_enriched_categories(self, user: User) -> list[dict]:
+        """Build a list of leaf categories with enriched descriptions for LLM.
+
+        Returns list of {id, name, parent_name, description}.
+        """
+        from app.services.category_descriptions import get_category_description
+
+        result = await self.db.execute(
+            select(Category)
+            .where(
+                or_(Category.is_system.is_(True), Category.user_id == user.id)
+            )
+            .order_by(Category.parent_id.nulls_first(), Category.name)
+        )
+        all_cats = list(result.scalars().all())
+        cat_map = {c.id: c for c in all_cats}
+        parent_ids = {c.parent_id for c in all_cats if c.parent_id}
+
+        enriched = []
+        for c in all_cats:
+            if c.id in parent_ids:
+                continue  # skip parent categories
+            parent_name = (
+                cat_map[c.parent_id].name
+                if c.parent_id and c.parent_id in cat_map
+                else None
+            )
+            enriched.append({
+                "id": c.id,
+                "name": c.name,
+                "parent_name": parent_name,
+                "description": get_category_description(c.name),
+            })
+        return enriched
+
     # ── Similarity search ───────────────────────────────
 
     async def _get_classified_transactions_with_embeddings(
@@ -213,7 +251,7 @@ class EmbeddingService:
         """Suggest a category for a single transaction based on embeddings.
 
         Returns {category_id, category_name, confidence, source} or None.
-        source is 'similar_transactions' or 'category_semantics'.
+        source is 'similar_transactions' or 'llm'.
         """
         if transaction.embedding is None:
             return None
@@ -235,7 +273,29 @@ class EmbeddingService:
             if suggestion:
                 return suggestion
 
-        # Strategy 2: Use category semantics if above threshold
+        # Strategy 2: LLM classification
+        if settings.llm_enabled:
+            from app.services.llm_service import LLMService
+            llm_service = LLMService()
+            if await llm_service.is_available():
+                enriched_cats = await self._get_enriched_categories(user)
+                counterparty = (
+                    transaction.parsed_metadata.get("counterparty")
+                    if transaction.parsed_metadata
+                    else None
+                )
+                label = counterparty or transaction.label_raw
+                return await llm_service.suggest_category(
+                    representative_label=label,
+                    sample_transactions=[{
+                        "label_raw": transaction.label_raw,
+                        "amount": float(transaction.amount),
+                        "date": transaction.date.isoformat(),
+                    }],
+                    categories=enriched_cats,
+                )
+
+        # Strategy 3: fall back to category semantics if above threshold
         return cat_suggestion if (cat_suggestion and cat_suggestion["similarity"] >= settings.embedding_category_threshold) else None
 
     async def _suggest_from_neighbors(
@@ -430,7 +490,19 @@ class EmbeddingService:
 
         # Get classified transactions for suggestion via neighbors
         classified = await self._get_classified_transactions_with_embeddings(user, account_id)
-        cat_embeddings = await self._get_category_embeddings(user)
+
+        # Build enriched category list for LLM
+        enriched_cats = await self._get_enriched_categories(user)
+
+        # Check LLM availability (once, for all clusters)
+        llm_available = False
+        llm_service = None
+        if settings.llm_enabled:
+            from app.services.llm_service import LLMService
+            llm_service = LLMService()
+            llm_available = await llm_service.is_available()
+            if not llm_available:
+                logger.info("llm_not_available", url=settings.llm_base_url)
 
         # Build cluster response (sort by total_amount_abs desc, then by count)
         def cluster_sort_key(item: tuple[int, list[int]]) -> tuple[float, int]:
@@ -440,6 +512,8 @@ class EmbeddingService:
             return (-total_abs, -len(indices))
 
         clusters = []
+        clusters_needing_llm = []  # clusters where k-NN didn't help
+
         for cluster_id, indices in sorted(cluster_map.items(), key=cluster_sort_key):
             cluster_txns = [uncategorized[i] for i in indices]
             total_amount_abs = sum(abs(float(t.amount)) for t in cluster_txns)
@@ -460,33 +534,6 @@ class EmbeddingService:
                 label_counts[display_label] = label_counts.get(display_label, 0) + 1
             representative_label = max(label_counts, key=label_counts.get)
 
-            # Suggest category: prefer category-by-distance when similarity high, else k-NN
-            suggestion = None
-            prefer_cat = settings.embedding_category_prefer_threshold
-            cat_suggestion = None
-            leaf_cats = [c for c in cat_embeddings if c["is_leaf"]]
-            if leaf_cats:
-                cat_embs = np.array([c["embedding"] for c in leaf_cats])
-                sims = cosine_similarity(centroid, cat_embs)[0]
-                best_idx = np.argmax(sims)
-                best_sim = float(sims[best_idx])
-                if best_sim >= settings.embedding_category_threshold:
-                    best_cat = leaf_cats[best_idx]
-                    cat_suggestion = {
-                        "category_id": best_cat["id"],
-                        "category_name": best_cat["name"],
-                        "confidence": "medium" if best_sim >= settings.embedding_similarity_medium else "low",
-                        "similarity": best_sim,
-                        "source": "category_semantics",
-                    }
-
-            if cat_suggestion and cat_suggestion["similarity"] >= prefer_cat:
-                suggestion = cat_suggestion
-            elif classified:
-                suggestion = await self._suggest_from_neighbors(centroid, classified)
-            if suggestion is None and cat_suggestion:
-                suggestion = cat_suggestion
-
             # Full list of transactions (for review and exclude)
             all_txns = [
                 {
@@ -498,7 +545,12 @@ class EmbeddingService:
                 for txn in cluster_txns
             ]
 
-            clusters.append({
+            # Strategy 1: k-NN on classified transactions
+            suggestion = None
+            if classified:
+                suggestion = await self._suggest_from_neighbors(centroid, classified)
+
+            cluster_data = {
                 "cluster_id": cluster_id,
                 "transaction_count": len(cluster_txns),
                 "total_amount_abs": total_amount_abs,
@@ -506,12 +558,49 @@ class EmbeddingService:
                 "sample_transactions": all_txns[:5],
                 "transactions": all_txns,
                 "representative_label": representative_label,
-                "suggested_category_id": suggestion["category_id"] if suggestion else None,
-                "suggested_category_name": suggestion["category_name"] if suggestion else None,
-                "suggestion_confidence": suggestion["confidence"] if suggestion else None,
-                "suggestion_similarity": suggestion["similarity"] if suggestion else None,
-                "suggestion_source": suggestion["source"] if suggestion else None,
-            })
+                "suggested_category_id": None,
+                "suggested_category_name": None,
+                "suggestion_confidence": None,
+                "suggestion_similarity": None,
+                "suggestion_source": None,
+                "suggestion_explanation": None,
+            }
+
+            if suggestion:
+                cluster_data.update({
+                    "suggested_category_id": suggestion["category_id"],
+                    "suggested_category_name": suggestion["category_name"],
+                    "suggestion_confidence": suggestion["confidence"],
+                    "suggestion_similarity": suggestion["similarity"],
+                    "suggestion_source": suggestion["source"],
+                    "suggestion_explanation": suggestion.get("explanation"),
+                })
+            else:
+                clusters_needing_llm.append(cluster_data)
+
+            clusters.append(cluster_data)
+
+        # Strategy 2: LLM classification for clusters without k-NN match
+        if clusters_needing_llm and llm_available and llm_service:
+            logger.info(
+                "llm_classification_start",
+                clusters_to_classify=len(clusters_needing_llm),
+            )
+            for cluster_data in clusters_needing_llm:
+                suggestion = await llm_service.suggest_category(
+                    representative_label=cluster_data["representative_label"],
+                    sample_transactions=cluster_data["sample_transactions"],
+                    categories=enriched_cats,
+                )
+                if suggestion:
+                    cluster_data.update({
+                        "suggested_category_id": suggestion["category_id"],
+                        "suggested_category_name": suggestion["category_name"],
+                        "suggestion_confidence": suggestion["confidence"],
+                        "suggestion_similarity": suggestion.get("similarity"),
+                        "suggestion_source": suggestion["source"],
+                        "suggestion_explanation": suggestion.get("explanation"),
+                    })
 
         logger.info(
             "clustering_complete",
