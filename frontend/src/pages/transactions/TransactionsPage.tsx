@@ -70,9 +70,19 @@ export default function TransactionsPage() {
     search: "",
   });
 
-  // Cluster review
+  // Cluster review (distance_threshold: lower = more selective, higher = more grouping)
+  const CLUSTER_SENSITIVITY_OPTIONS = [
+    { value: 0.1, label: "Super exigeant" },
+    { value: 0.14, label: "Très exigeant" },
+    { value: 0.18, label: "Exigeant" },
+    { value: 0.22, label: "Très sélectif" },
+    { value: 0.28, label: "Sélectif" },
+    { value: 0.36, label: "Normal" },
+    { value: 0.48, label: "Large" },
+  ] as const;
   const [clusterLoading, setClusterLoading] = useState(false);
   const [clustersData, setClustersData] = useState<ClustersResponse | null>(null);
+  const [clusterDistanceThreshold, setClusterDistanceThreshold] = useState(0.22);
 
   // Debounced search
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -220,7 +230,11 @@ export default function TransactionsPage() {
       // Step 2: compute missing embeddings (uses cleaned counterparty)
       await transactionService.computeEmbeddings(accountIdParam);
       // Step 3: fetch clusters with suggestions
-      const result = await transactionService.getClusters(accountIdParam);
+      const result = await transactionService.getClusters(
+        accountIdParam,
+        undefined,
+        clusterDistanceThreshold
+      );
       if (result.total_uncategorized === 0) {
         setError("Toutes les transactions sont deja classees.");
       } else {
@@ -231,7 +245,7 @@ export default function TransactionsPage() {
     } finally {
       setClusterLoading(false);
     }
-  }, [filters.accountId]);
+  }, [filters.accountId, clusterDistanceThreshold]);
 
   const handleClusterClose = useCallback(
     (refreshNeeded: boolean) => {
@@ -416,7 +430,22 @@ export default function TransactionsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Transactions</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground whitespace-nowrap">Regroupement :</span>
+            <select
+              value={clusterDistanceThreshold}
+              onChange={(e) => setClusterDistanceThreshold(Number(e.target.value))}
+              className="text-xs rounded border border-input bg-background px-2 py-1.5"
+              title="Plus sélectif = clusters plus homogènes, moins de regroupements hasardeux"
+            >
+              {CLUSTER_SENSITIVITY_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
           <Button variant="outline" onClick={handleShowClusters} disabled={clusterLoading}>
             {clusterLoading ? (
               <>

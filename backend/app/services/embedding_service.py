@@ -71,15 +71,20 @@ class EmbeddingService:
     ) -> str:
         """Build the text to embed for a transaction.
 
-        Uses the cleaned counterparty from parsed_metadata when available,
-        since the counterparty is the most semantically relevant part.
-        Falls back to the full label_raw otherwise.
-
-        A direction tag [income/expense] is appended to help distinguish
-        transactions with similar labels but different natures.
+        Uses the cleaned counterparty from parsed_metadata when available.
+        Reinforces configured keywords by repeating them so the model weights them more.
+        A direction tag [income/expense] is appended.
         """
         base_text = get_embedding_text(parsed_metadata, label_raw)
-        return f"{base_text} [{amount_sign}]"
+        base_lower = base_text.lower()
+        repeat = max(1, settings.embedding_boost_repeat)
+        keywords = [k.strip() for k in settings.embedding_boost_keywords.split(",") if k.strip()]
+        prefix_parts = []
+        for kw in keywords:
+            if kw.lower() in base_lower:
+                prefix_parts.append((kw + " ") * repeat)
+        prefix = " ".join(prefix_parts) + " " if prefix_parts else ""
+        return f"{prefix}{base_text} [{amount_sign}]"
 
     # ── Ensure embeddings exist ─────────────────────────
 
@@ -214,6 +219,14 @@ class EmbeddingService:
             return None
 
         txn_emb = np.array(transaction.embedding).reshape(1, -1)
+        prefer_cat = settings.embedding_category_prefer_threshold
+
+        # Category-by-distance: closest category in embedding space (always computed)
+        cat_suggestion = await self._get_best_category_suggestion(txn_emb, user)
+
+        # When category similarity is high enough, prefer it over k-NN
+        if cat_suggestion and cat_suggestion["similarity"] >= prefer_cat:
+            return cat_suggestion
 
         # Strategy 1: k-NN on classified transactions
         classified = await self._get_classified_transactions_with_embeddings(user)
@@ -222,8 +235,8 @@ class EmbeddingService:
             if suggestion:
                 return suggestion
 
-        # Strategy 2: Semantic match against category embeddings
-        return await self._suggest_from_categories(txn_emb, user)
+        # Strategy 2: Use category semantics if above threshold
+        return cat_suggestion if (cat_suggestion and cat_suggestion["similarity"] >= settings.embedding_category_threshold) else None
 
     async def _suggest_from_neighbors(
         self,
@@ -278,43 +291,44 @@ class EmbeddingService:
             "source": "similar_transactions",
         }
 
-    async def _suggest_from_categories(
+    async def _get_best_category_suggestion(
         self,
         txn_emb: np.ndarray,
         user: User,
     ) -> dict | None:
-        """Suggest category from semantic similarity to category names."""
+        """Best category by cosine similarity to category embeddings (distance to closest).
+        Returns suggestion dict with similarity; caller applies threshold.
+        """
         cat_embeddings = await self._get_category_embeddings(user)
-
-        # Only consider leaf categories for suggestions
         leaf_cats = [c for c in cat_embeddings if c["is_leaf"]]
         if not leaf_cats:
             return None
 
         cat_embs = np.array([c["embedding"] for c in leaf_cats])
         similarities = cosine_similarity(txn_emb, cat_embs)[0]
-
         best_idx = np.argmax(similarities)
-        best_sim = similarities[best_idx]
-
-        if best_sim < settings.embedding_category_threshold:
-            return None
-
+        best_sim = float(similarities[best_idx])
         best_cat = leaf_cats[best_idx]
 
-        # Category semantic matches are capped at "medium" confidence
-        if best_sim >= settings.embedding_similarity_medium:
-            confidence = "medium"
-        else:
-            confidence = "low"
-
+        confidence = "medium" if best_sim >= settings.embedding_similarity_medium else "low"
         return {
             "category_id": best_cat["id"],
             "category_name": best_cat["name"],
             "confidence": confidence,
-            "similarity": float(best_sim),
+            "similarity": best_sim,
             "source": "category_semantics",
         }
+
+    async def _suggest_from_categories(
+        self,
+        txn_emb: np.ndarray,
+        user: User,
+    ) -> dict | None:
+        """Suggest category from semantic similarity (closest in embedding space)."""
+        suggestion = await self._get_best_category_suggestion(txn_emb, user)
+        if suggestion is None or suggestion["similarity"] < settings.embedding_category_threshold:
+            return None
+        return suggestion
 
     # ── Clustering ──────────────────────────────────────
 
@@ -323,16 +337,21 @@ class EmbeddingService:
         user: User,
         account_id: int | None = None,
         min_cluster_size: int | None = None,
+        distance_threshold: float | None = None,
     ) -> dict:
         """Cluster uncategorized transactions and suggest categories.
 
+        distance_threshold: cosine distance below which points are merged (0–2).
+        Lower = more selective (smaller, tighter clusters); higher = more grouping.
+        Default from settings (e.g. 0.5).
+
         Returns {clusters: [...], unclustered_count, total_uncategorized}.
-        Each cluster has: {cluster_id, transaction_count, sample_transactions,
-        suggested_category_id, suggested_category_name, suggestion_confidence,
-        suggestion_source, representative_label}.
         """
         if min_cluster_size is None:
             min_cluster_size = settings.embedding_min_cluster_size
+        if distance_threshold is None:
+            distance_threshold = settings.embedding_cluster_distance_threshold
+        distance_threshold = float(distance_threshold)
 
         # Fetch uncategorized transactions with embeddings
         user_accounts = select(Account.id).where(Account.user_id == user.id)
@@ -388,7 +407,7 @@ class EmbeddingService:
 
         clusterer = AgglomerativeClustering(
             n_clusters=None,
-            distance_threshold=0.5,
+            distance_threshold=distance_threshold,
             metric="precomputed",
             linkage="average",
         )
@@ -413,10 +432,17 @@ class EmbeddingService:
         classified = await self._get_classified_transactions_with_embeddings(user, account_id)
         cat_embeddings = await self._get_category_embeddings(user)
 
-        # Build cluster response
+        # Build cluster response (sort by total_amount_abs desc, then by count)
+        def cluster_sort_key(item: tuple[int, list[int]]) -> tuple[float, int]:
+            indices = item[1]
+            txns = [uncategorized[i] for i in indices]
+            total_abs = sum(abs(float(t.amount)) for t in txns)
+            return (-total_abs, -len(indices))
+
         clusters = []
-        for cluster_id, indices in sorted(cluster_map.items(), key=lambda x: -len(x[1])):
+        for cluster_id, indices in sorted(cluster_map.items(), key=cluster_sort_key):
             cluster_txns = [uncategorized[i] for i in indices]
+            total_amount_abs = sum(abs(float(t.amount)) for t in cluster_txns)
 
             # Centroid embedding
             cluster_embs = embeddings[indices]
@@ -434,48 +460,51 @@ class EmbeddingService:
                 label_counts[display_label] = label_counts.get(display_label, 0) + 1
             representative_label = max(label_counts, key=label_counts.get)
 
-            # Suggest category for the cluster centroid
+            # Suggest category: prefer category-by-distance when similarity high, else k-NN
             suggestion = None
+            prefer_cat = settings.embedding_category_prefer_threshold
+            cat_suggestion = None
+            leaf_cats = [c for c in cat_embeddings if c["is_leaf"]]
+            if leaf_cats:
+                cat_embs = np.array([c["embedding"] for c in leaf_cats])
+                sims = cosine_similarity(centroid, cat_embs)[0]
+                best_idx = np.argmax(sims)
+                best_sim = float(sims[best_idx])
+                if best_sim >= settings.embedding_category_threshold:
+                    best_cat = leaf_cats[best_idx]
+                    cat_suggestion = {
+                        "category_id": best_cat["id"],
+                        "category_name": best_cat["name"],
+                        "confidence": "medium" if best_sim >= settings.embedding_similarity_medium else "low",
+                        "similarity": best_sim,
+                        "source": "category_semantics",
+                    }
 
-            # Strategy 1: k-NN on classified transactions
-            if classified:
+            if cat_suggestion and cat_suggestion["similarity"] >= prefer_cat:
+                suggestion = cat_suggestion
+            elif classified:
                 suggestion = await self._suggest_from_neighbors(centroid, classified)
+            if suggestion is None and cat_suggestion:
+                suggestion = cat_suggestion
 
-            # Strategy 2: Semantic match against categories
-            if suggestion is None:
-                leaf_cats = [c for c in cat_embeddings if c["is_leaf"]]
-                if leaf_cats:
-                    cat_embs = np.array([c["embedding"] for c in leaf_cats])
-                    sims = cosine_similarity(centroid, cat_embs)[0]
-                    best_idx = np.argmax(sims)
-                    best_sim = sims[best_idx]
-                    if best_sim >= settings.embedding_category_threshold:
-                        best_cat = leaf_cats[best_idx]
-                        confidence = "medium" if best_sim >= settings.embedding_similarity_medium else "low"
-                        suggestion = {
-                            "category_id": best_cat["id"],
-                            "category_name": best_cat["name"],
-                            "confidence": confidence,
-                            "similarity": float(best_sim),
-                            "source": "category_semantics",
-                        }
-
-            # Sample transactions (up to 5)
-            sample_txns = [
+            # Full list of transactions (for review and exclude)
+            all_txns = [
                 {
                     "id": txn.id,
                     "label_raw": txn.label_raw,
                     "amount": float(txn.amount),
                     "date": txn.date.isoformat(),
                 }
-                for txn in cluster_txns[:5]
+                for txn in cluster_txns
             ]
 
             clusters.append({
                 "cluster_id": cluster_id,
                 "transaction_count": len(cluster_txns),
+                "total_amount_abs": total_amount_abs,
                 "transaction_ids": [txn.id for txn in cluster_txns],
-                "sample_transactions": sample_txns,
+                "sample_transactions": all_txns[:5],
+                "transactions": all_txns,
                 "representative_label": representative_label,
                 "suggested_category_id": suggestion["category_id"] if suggestion else None,
                 "suggested_category_name": suggestion["category_name"] if suggestion else None,

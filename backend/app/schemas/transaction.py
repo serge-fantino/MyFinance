@@ -99,8 +99,10 @@ class TransactionCluster(BaseModel):
     """A cluster of similar uncategorized transactions with a category suggestion."""
     cluster_id: int
     transaction_count: int
+    total_amount_abs: float
     transaction_ids: list[int]
     sample_transactions: list[ClusterSampleTransaction]
+    transactions: list[ClusterSampleTransaction]
     representative_label: str
     suggested_category_id: int | None = None
     suggested_category_name: str | None = None

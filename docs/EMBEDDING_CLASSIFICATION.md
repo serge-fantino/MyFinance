@@ -160,6 +160,9 @@ Exemples :
 
 Le tag `[income]`/`[expense]` aide le modèle à distinguer les virements de nature différente.
 
+**Renforcement de mots-clés (optionnel) :**  
+Pour donner plus de poids à certains noms (marchands, libellés récurrents), on peut configurer `EMBEDDING_BOOST_KEYWORDS` (liste séparée par des virgules). Chaque mot présent dans le libellé est répété avant le texte envoyé au modèle, ce qui renforce son influence dans l’embedding. Ex. `EMBEDDING_BOOST_KEYWORDS=LECLERC,AMAZON` et `EMBEDDING_BOOST_REPEAT=2` (défaut). Après modification, il faut recalculer les embeddings (bouton Suggestions ou tâche dédiée).
+
 ### 2.3 Stockage (pgvector)
 
 Les embeddings sont stockés directement dans la table `transactions` via l'extension PostgreSQL `pgvector` :
@@ -194,6 +197,9 @@ Exemples :
 - `"Transferts > Virement entre comptes"` → embedding
 
 Les embeddings de catégories sont calculés à la demande et mis en cache en mémoire.
+
+**Suggestion par distance à la catégorie la plus proche :**  
+Pour proposer une catégorie, on calcule la similarité cosinus entre l’embedding de la transaction (ou du centroïde du cluster) et l’embedding de chaque catégorie feuille, puis on choisit la **catégorie la plus proche** (similarité maximale). Quand cette similarité dépasse `embedding_category_prefer_threshold` (défaut 0,62), cette suggestion est **prioritaire** sur le k-NN des transactions déjà classées, ce qui améliore la cohérence avec le vocabulaire des catégories.
 
 ---
 

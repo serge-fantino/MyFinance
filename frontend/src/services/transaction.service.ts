@@ -83,10 +83,15 @@ export const transactionService = {
     return response.data;
   },
 
-  async getClusters(accountId?: number, minClusterSize?: number): Promise<ClustersResponse> {
+  async getClusters(
+    accountId?: number,
+    minClusterSize?: number,
+    distanceThreshold?: number
+  ): Promise<ClustersResponse> {
     const params: Record<string, unknown> = {};
     if (accountId) params.account_id = accountId;
     if (minClusterSize) params.min_cluster_size = minClusterSize;
+    if (distanceThreshold != null) params.distance_threshold = distanceThreshold;
     const response = await api.get("/transactions/clusters", { params });
     return response.data;
   },

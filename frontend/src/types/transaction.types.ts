@@ -121,8 +121,10 @@ export interface ClusterSampleTransaction {
 export interface TransactionCluster {
   cluster_id: number;
   transaction_count: number;
+  total_amount_abs: number;
   transaction_ids: number[];
   sample_transactions: ClusterSampleTransaction[];
+  transactions: ClusterSampleTransaction[];
   representative_label: string;
   suggested_category_id: number | null;
   suggested_category_name: string | null;
