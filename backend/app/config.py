@@ -34,7 +34,14 @@ class Settings(BaseSettings):
     embedding_similarity_medium: float = 0.70
     embedding_similarity_low: float = 0.55
     embedding_category_threshold: float = 0.40
+    # When best category similarity >= this, prefer category semantics over k-NN (0 = disabled)
+    embedding_category_prefer_threshold: float = 0.62
     embedding_min_cluster_size: int = 3
+    # Clustering: lower = more selective (stricter similarity), higher = more grouping
+    embedding_cluster_distance_threshold: float = 0.5
+    # Comma-separated keywords to reinforce in embeddings (e.g. "LECLERC,AMAZON")
+    embedding_boost_keywords: str = ""
+    embedding_boost_repeat: int = 2
 
     # CORS
     cors_origins: str = "http://localhost:3000,http://localhost:5173"

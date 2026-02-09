@@ -38,19 +38,33 @@ export function ClusterReviewModal({
   const [processing, setProcessing] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [anyApplied, setAnyApplied] = useState(false);
+  const [sortBy, setSortBy] = useState<"amount" | "count">("amount");
+  const [excludedIds, setExcludedIds] = useState<Record<number, Set<number>>>({});
 
   const acceptedCount = Object.values(statuses).filter((s) => s === "accepted").length;
   const totalClusters = clusters.clusters.length;
+
+  const sortedClusters = [...clusters.clusters].sort((a, b) =>
+    sortBy === "amount"
+      ? b.total_amount_abs - a.total_amount_abs
+      : b.transaction_count - a.transaction_count
+  );
 
   const handleAccept = async (cluster: TransactionCluster) => {
     const categoryId = overrides[cluster.cluster_id] ?? cluster.suggested_category_id;
     if (!categoryId) return;
 
+    const excluded = excludedIds[cluster.cluster_id];
+    const idsToClassify = excluded
+      ? cluster.transaction_ids.filter((id) => !excluded.has(id))
+      : cluster.transaction_ids;
+    if (idsToClassify.length === 0) return;
+
     setProcessing(cluster.cluster_id);
     setError(null);
     try {
       await transactionService.classifyCluster({
-        transaction_ids: cluster.transaction_ids,
+        transaction_ids: idsToClassify,
         category_id: categoryId,
         create_rule: true,
         rule_pattern: rulePatterns[cluster.cluster_id] || undefined,
@@ -89,6 +103,25 @@ export function ClusterReviewModal({
               <span> {clusters.unclustered_count} transaction{clusters.unclustered_count > 1 ? "s" : ""} isolee{clusters.unclustered_count > 1 ? "s" : ""}.</span>
             )}
           </p>
+          {totalClusters > 0 && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Trier par :</span>
+              <button
+                type="button"
+                onClick={() => setSortBy("amount")}
+                className={`text-xs px-2 py-1 rounded ${sortBy === "amount" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"}`}
+              >
+                Montant total
+              </button>
+              <button
+                type="button"
+                onClick={() => setSortBy("count")}
+                className={`text-xs px-2 py-1 rounded ${sortBy === "count" ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/80"}`}
+              >
+                Nombre de transactions
+              </button>
+            </div>
+          )}
           {acceptedCount > 0 && (
             <div className="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
               {acceptedCount} / {totalClusters} groupe{acceptedCount > 1 ? "s" : ""} classifie{acceptedCount > 1 ? "s" : ""}
@@ -109,7 +142,7 @@ export function ClusterReviewModal({
             </div>
           )}
 
-          {clusters.clusters.map((cluster) => {
+          {sortedClusters.map((cluster) => {
             const status = statuses[cluster.cluster_id];
             if (status === "accepted" || status === "skipped") {
               return (
@@ -137,12 +170,21 @@ export function ClusterReviewModal({
                 overrideCategory={overrides[cluster.cluster_id] ?? null}
                 rulePattern={rulePatterns[cluster.cluster_id] ?? ""}
                 customLabel={customLabels[cluster.cluster_id] ?? ""}
+                excludedIds={excludedIds[cluster.cluster_id]}
                 isProcessing={processing === cluster.cluster_id}
                 onAccept={() => handleAccept(cluster)}
                 onSkip={() => handleSkip(cluster.cluster_id)}
                 onOverrideCategory={(catId) => handleOverrideCategory(cluster.cluster_id, catId)}
                 onRulePatternChange={(v) => setRulePatterns((p) => ({ ...p, [cluster.cluster_id]: v }))}
                 onCustomLabelChange={(v) => setCustomLabels((p) => ({ ...p, [cluster.cluster_id]: v }))}
+                onToggleExclude={(txnId) => {
+                  setExcludedIds((prev) => {
+                    const set = new Set(prev[cluster.cluster_id] ?? []);
+                    if (set.has(txnId)) set.delete(txnId);
+                    else set.add(txnId);
+                    return { ...prev, [cluster.cluster_id]: set };
+                  });
+                }}
                 onCategoryDropdownOpen={onCategoryDropdownOpen}
               />
             );
@@ -171,12 +213,14 @@ function ClusterCard({
   overrideCategory,
   rulePattern,
   customLabel,
+  excludedIds,
   isProcessing,
   onAccept,
   onSkip,
   onOverrideCategory,
   onRulePatternChange,
   onCustomLabelChange,
+  onToggleExclude,
   onCategoryDropdownOpen,
 }: {
   cluster: TransactionCluster;
@@ -184,15 +228,19 @@ function ClusterCard({
   overrideCategory: number | null;
   rulePattern: string;
   customLabel: string;
+  excludedIds: Set<number> | undefined;
   isProcessing: boolean;
   onAccept: () => void;
   onSkip: () => void;
   onOverrideCategory: (catId: number | null) => void;
   onRulePatternChange: (v: string) => void;
   onCustomLabelChange: (v: string) => void;
+  onToggleExclude: (txnId: number) => void;
   onCategoryDropdownOpen?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const excludedCount = excludedIds?.size ?? 0;
+  const includedCount = cluster.transaction_count - excludedCount;
 
   const effectiveCategoryId = overrideCategory ?? cluster.suggested_category_id;
   const effectiveCategoryName =
@@ -201,6 +249,8 @@ function ClusterCard({
       : cluster.suggested_category_name;
   const confidence = cluster.suggestion_confidence;
   const hasSuggestion = effectiveCategoryId != null;
+
+  const transactions = cluster.transactions ?? cluster.sample_transactions;
 
   return (
     <div className="rounded-lg border bg-card p-4 space-y-3">
@@ -211,6 +261,9 @@ function ClusterCard({
             <span className="font-medium text-sm truncate">{cluster.representative_label}</span>
             <span className="text-xs text-muted-foreground shrink-0">
               {cluster.transaction_count} transaction{cluster.transaction_count > 1 ? "s" : ""}
+              {cluster.total_amount_abs != null && (
+                <> · {formatCurrency(cluster.total_amount_abs)}</>
+              )}
             </span>
           </div>
           {/* Suggestion badge */}
@@ -241,22 +294,38 @@ function ClusterCard({
         </button>
       </div>
 
-      {/* Expanded details: sample transactions */}
+      {/* Expanded details: full transaction list with include/exclude */}
       {expanded && (
         <div className="bg-muted/30 rounded-md p-2 space-y-1">
-          <p className="text-[10px] text-muted-foreground font-medium mb-1">Exemples :</p>
-          {cluster.sample_transactions.map((txn) => (
-            <div key={txn.id} className="flex items-center justify-between text-xs gap-2">
-              <span className="text-muted-foreground shrink-0">{formatDate(txn.date)}</span>
-              <span className="truncate flex-1">{txn.label_raw}</span>
-              <span className={`shrink-0 font-medium ${txn.amount >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-                {txn.amount >= 0 ? "+" : ""}{formatCurrency(txn.amount)}
-              </span>
-            </div>
-          ))}
-          {cluster.transaction_count > cluster.sample_transactions.length && (
+          <p className="text-[10px] text-muted-foreground font-medium mb-1">
+            Liste des transactions ({transactions.length}) — décocher pour exclure de la classification
+          </p>
+          <div className="max-h-48 overflow-y-auto space-y-0.5">
+            {transactions.map((txn) => {
+              const excluded = excludedIds?.has(txn.id) ?? false;
+              return (
+                <label
+                  key={txn.id}
+                  className={`flex items-center gap-2 text-xs cursor-pointer rounded px-1 py-0.5 -mx-1 ${excluded ? "opacity-50" : ""}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={!excluded}
+                    onChange={() => onToggleExclude(txn.id)}
+                    className="rounded border-input shrink-0"
+                  />
+                  <span className="text-muted-foreground shrink-0 w-16">{formatDate(txn.date)}</span>
+                  <span className="truncate flex-1 min-w-0">{txn.label_raw}</span>
+                  <span className={`shrink-0 font-medium ${txn.amount >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                    {txn.amount >= 0 ? "+" : ""}{formatCurrency(txn.amount)}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          {excludedCount > 0 && (
             <p className="text-[10px] text-muted-foreground mt-1">
-              ... et {cluster.transaction_count - cluster.sample_transactions.length} autre{cluster.transaction_count - cluster.sample_transactions.length > 1 ? "s" : ""}
+              {excludedCount} transaction{excludedCount > 1 ? "s" : ""} exclue{excludedCount > 1 ? "s" : ""} — {includedCount} seront classifiée{includedCount > 1 ? "s" : ""}
             </p>
           )}
         </div>
@@ -307,12 +376,13 @@ function ClusterCard({
       <div className="flex gap-2 pt-1">
         <Button
           size="sm"
-          disabled={!hasSuggestion || isProcessing}
+          disabled={!hasSuggestion || isProcessing || includedCount === 0}
           isLoading={isProcessing}
           onClick={onAccept}
           className="flex-1"
         >
           Appliquer{effectiveCategoryName ? ` "${effectiveCategoryName}"` : ""}
+          {includedCount > 0 && includedCount < cluster.transaction_count && ` (${includedCount})`}
         </Button>
         <Button
           variant="ghost"

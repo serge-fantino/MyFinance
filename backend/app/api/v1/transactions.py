@@ -163,20 +163,26 @@ async def compute_embeddings(
 async def get_clusters(
     account_id: int | None = None,
     min_cluster_size: int = Query(3, ge=2, le=50),
+    distance_threshold: float | None = Query(
+        None,
+        ge=0.08,
+        le=0.95,
+        description="Cosine distance threshold: lower = more selective (tighter clusters), higher = more grouping.",
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Get clusters of similar uncategorized transactions with category suggestions.
 
-    Each cluster groups transactions with similar labels/patterns and proposes
-    a category based on:
-    1. Previously classified similar transactions (k-NN)
-    2. Semantic similarity to category names (fallback)
+    distance_threshold: controls how strict the grouping is. Lower values (e.g. 0.25–0.35)
+    produce smaller, more homogeneous clusters; higher values (e.g. 0.6–0.7) group more loosely.
 
-    The user decides whether to accept, modify, or ignore each suggestion.
+    Each cluster proposes a category via k-NN on classified transactions or category semantics.
     """
     service = EmbeddingService(db)
-    return await service.get_clusters(current_user, account_id, min_cluster_size)
+    return await service.get_clusters(
+        current_user, account_id, min_cluster_size, distance_threshold
+    )
 
 
 @router.post("/clusters/classify", response_model=ClusterClassifyResult)
