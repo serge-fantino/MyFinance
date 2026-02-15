@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import { Alert } from "../../components/ui/Alert";
 import { ImportModal } from "./ImportModal";
@@ -7,12 +8,11 @@ import { TransactionKPIs } from "./TransactionKPIs";
 import { TransactionFilters, type FilterState } from "./TransactionFilters";
 import { CategoryRuleModal, type CategoryRuleModalPayload } from "./CategoryRuleModal";
 import { EditTransactionModal, type EditTransactionPayload } from "./EditTransactionModal";
-import { ClusterReviewModal } from "./ClusterReviewModal";
 import { transactionService } from "../../services/transaction.service";
 import { accountService } from "../../services/account.service";
 import { categoryService } from "../../services/category.service";
 import { formatCurrency, formatDate } from "../../utils/format";
-import type { Transaction, PaginatedTransactions, CashflowMonthly, CashflowDaily, ClustersResponse } from "../../types/transaction.types";
+import type { Transaction, PaginatedTransactions, CashflowMonthly, CashflowDaily } from "../../types/transaction.types";
 import type { Account } from "../../types/account.types";
 import type { Category } from "../../types/category.types";
 
@@ -69,20 +69,6 @@ export default function TransactionsPage() {
     dateTo: "",
     search: "",
   });
-
-  // Cluster review (distance_threshold: lower = more selective, higher = more grouping)
-  const CLUSTER_SENSITIVITY_OPTIONS = [
-    { value: 0.1, label: "Super exigeant" },
-    { value: 0.14, label: "Très exigeant" },
-    { value: 0.18, label: "Exigeant" },
-    { value: 0.22, label: "Très sélectif" },
-    { value: 0.28, label: "Sélectif" },
-    { value: 0.36, label: "Normal" },
-    { value: 0.48, label: "Large" },
-  ] as const;
-  const [clusterLoading, setClusterLoading] = useState(false);
-  const [clustersData, setClustersData] = useState<ClustersResponse | null>(null);
-  const [clusterDistanceThreshold, setClusterDistanceThreshold] = useState(0.22);
 
   // Debounced search
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -213,44 +199,6 @@ export default function TransactionsPage() {
       setImportOpen(false);
       if (refreshNeeded) {
         setPage(1);
-        fetchTransactions();
-        fetchCashflow();
-      }
-    },
-    [fetchTransactions, fetchCashflow]
-  );
-
-  const handleShowClusters = useCallback(async () => {
-    try {
-      setClusterLoading(true);
-      setError(null);
-      const accountIdParam = filters.accountId ? parseInt(filters.accountId) : undefined;
-      // Step 1: parse labels for transactions missing metadata
-      await transactionService.parseLabels(accountIdParam);
-      // Step 2: compute missing embeddings (uses cleaned counterparty)
-      await transactionService.computeEmbeddings(accountIdParam);
-      // Step 3: fetch clusters with suggestions
-      const result = await transactionService.getClusters(
-        accountIdParam,
-        undefined,
-        clusterDistanceThreshold
-      );
-      if (result.total_uncategorized === 0) {
-        setError("Toutes les transactions sont deja classees.");
-      } else {
-        setClustersData(result);
-      }
-    } catch {
-      setError("Erreur lors du calcul des suggestions.");
-    } finally {
-      setClusterLoading(false);
-    }
-  }, [filters.accountId, clusterDistanceThreshold]);
-
-  const handleClusterClose = useCallback(
-    (refreshNeeded: boolean) => {
-      setClustersData(null);
-      if (refreshNeeded) {
         fetchTransactions();
         fetchCashflow();
       }
@@ -431,39 +379,15 @@ export default function TransactionsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Transactions</h1>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-muted-foreground whitespace-nowrap">Regroupement :</span>
-            <select
-              value={clusterDistanceThreshold}
-              onChange={(e) => setClusterDistanceThreshold(Number(e.target.value))}
-              className="text-xs rounded border border-input bg-background px-2 py-1.5"
-              title="Plus sélectif = clusters plus homogènes, moins de regroupements hasardeux"
-            >
-              {CLUSTER_SENSITIVITY_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <Button variant="outline" onClick={handleShowClusters} disabled={clusterLoading}>
-            {clusterLoading ? (
-              <>
-                <svg className="w-4 h-4 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Analyse...
-              </>
-            ) : (
-              <>
-                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                </svg>
-                Suggestions
-              </>
-            )}
-          </Button>
+          <Link
+            to="/classification"
+            className="inline-flex items-center justify-center rounded-md font-medium transition-colors border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 text-sm"
+          >
+            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+            Classification
+          </Link>
           <Button onClick={() => setImportOpen(true)}>
             <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -624,15 +548,6 @@ export default function TransactionsPage() {
         onSave={handleEditTransactionSave}
         onCategoryDropdownOpen={fetchCategories}
       />
-
-      {clustersData && (
-        <ClusterReviewModal
-          clusters={clustersData}
-          flatCategories={flatCategories}
-          onClose={handleClusterClose}
-          onCategoryDropdownOpen={fetchCategories}
-        />
-      )}
     </div>
   );
 }

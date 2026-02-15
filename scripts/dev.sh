@@ -37,8 +37,8 @@ echo "  ╚═══════════════════════
 echo ""
 
 # ── Check .env ────────────────────────────────────────
-if [ ! -f "$ROOT_DIR/.env" ]; then
-    warn ".env not found. Run 'make setup' first."
+if [ ! -f "$ROOT_DIR/backend/.env" ]; then
+    warn "backend/.env not found. Run 'make setup' first."
     exit 1
 fi
 
@@ -59,6 +59,11 @@ for i in $(seq 1 30); do
 done
 
 ok "Redis ready"
+
+# Ollama (LLM) runs natively on macOS for GPU; see Makefile targets
+info "If you want LLM suggestions, ensure native Ollama is running on http://localhost:11434"
+info "  - Install/start: make install-ollama-mac (Mac M-series)"
+info "  - Status/models: make ollama-status"
 echo ""
 
 # ── Start backend ────────────────────────────────────
@@ -93,6 +98,7 @@ echo "  │  Frontend  → http://localhost:3000          │"
 echo "  │  Backend   → http://localhost:8000          │"
 echo "  │  API Docs  → http://localhost:8000/docs     │"
 echo "  │  Adminer   → http://localhost:8080          │"
+echo "  │  Ollama    → http://localhost:11434 (LLM)   │"
 echo "  │                                             │"
 echo "  │  Press Ctrl+C to stop all services          │"
 echo "  └─────────────────────────────────────────────┘"

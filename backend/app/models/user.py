@@ -23,3 +23,4 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     accounts = relationship("Account", back_populates="user", lazy="select")
     categories = relationship("Category", back_populates="user", lazy="select")
     conversations = relationship("Conversation", back_populates="user", lazy="select")
+    classification_proposals = relationship("ClassificationProposal", back_populates="user", lazy="select")

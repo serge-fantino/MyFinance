@@ -401,6 +401,8 @@ L'image Docker est remplacée par `pgvector/pgvector:pg16` (Debian-based, drop-i
 docker exec -it ollama ollama pull mistral
 ```
 
+**Mac M-series (M1/M2/M3/M4) :** Docker sur Mac n'expose pas le GPU Metal aux conteneurs, donc Ollama en Docker tourne en CPU et peut être très lent. Pour utiliser le GPU Metal, installer Ollama **en natif** sur macOS ([téléchargement](https://ollama.com/download/mac) ou `brew install --cask ollama`), lancer le service, puis `ollama pull mistral`. Le backend pointe déjà sur `localhost:11434`. Voir `make ollama-native-mac` et `docs/TROUBLESHOOTING.md` §8.
+
 ---
 
 ## 7. Performance et limites

@@ -12,6 +12,8 @@ Guide de résolution des problèmes rencontrés pendant le développement.
 4. [alembic : ModuleNotFoundError: No module named 'app'](#4-alembic--modulenotfounderror-no-module-named-app)
 5. [make : command not found (alembic, uvicorn, ruff...)](#5-make--command-not-found-alembic-uvicorn-ruff)
 6. [Frontend : écran "Chargement..." infini (deadlock auth)](#6-frontend--écran-chargement-infini-deadlock-auth)
+7. [Ollama non disponible (suggestions LLM)](#7-ollama-non-disponible-suggestions-llm)
+8. [Ollama sur Mac M-series : utiliser le GPU (Metal)](#8-ollama-sur-mac-m-series--utiliser-le-gpu-metal)
 
 ---
 
@@ -187,3 +189,109 @@ que les Guards ne soient évalués.
 - `frontend/src/hooks/useAuth.ts`
 - `frontend/src/components/auth/AuthGuard.tsx`
 - `frontend/src/components/auth/GuestGuard.tsx`
+
+---
+
+## 7. Ollama non disponible (suggestions LLM)
+
+### Symptôme
+- Dans la fenêtre Suggestions, le bouton « Interpréter (LLM) » ou les suggestions automatiques renvoient : **« Ollama non disponible »**
+- Message du type : « Vérifiez que le service tourne et que le modèle est chargé »
+
+### Cause
+Le backend appelle Ollama sur `LLM_BASE_URL` (par défaut `http://localhost:11434`). Soit le conteneur Ollama ne tourne pas, soit le modèle configuré (`LLM_MODEL`, ex. `mistral`) n’a pas été téléchargé dans le conteneur.
+
+### Solution
+
+1. **Démarrer l’infra (y compris Ollama)**  
+   ```bash
+   make dev-infra
+   ```
+   Cela lance PostgreSQL, Redis, Adminer et **Ollama**. Vérifier que le service `ollama` est bien « Up » :
+   ```bash
+   docker compose -f docker-compose.dev.yml ps
+   ```
+
+2. **Télécharger le modèle LLM (une fois)**  
+   Au premier lancement, le conteneur Ollama ne contient aucun modèle. Utiliser le Makefile :
+   ```bash
+   make ollama-pull
+   ```
+   Par défaut cela tire le modèle `mistral`. Pour un autre modèle :
+   ```bash
+   make ollama-pull LLM_MODEL=llama3.2
+   ```
+   Cela peut prendre quelques minutes.
+
+3. **Vérifier que Ollama répond**  
+   ```bash
+   make ollama-status
+   ```
+   Ou manuellement : `curl http://localhost:11434/api/tags` (réponse JSON listant les modèles).
+
+4. **Vérifier la config**  
+   Le backend utilise `backend/.env` : `LLM_BASE_URL` (défaut `http://localhost:11434`), `LLM_MODEL` (défaut `mistral`). Ils doivent correspondre à un modèle présent dans le conteneur.
+
+5. **Afficher le bouton « Interpréter (LLM) »**  
+   Par défaut, le bouton LLM est **masqué** dans l’interface pour que l’app fonctionne sans Ollama. Pour l’afficher une fois Ollama opérationnel, définir dans `backend/.env` :
+   ```bash
+   LLM_UI_ENABLED=true
+   ```
+   Puis redémarrer le backend.
+
+---
+
+## 8. Ollama sur Mac M-series : utiliser le GPU (Metal)
+
+### Symptôme
+- Ollama tourne mais les réponses du LLM sont **très lentes**
+- Le conteneur Docker Ollama ne peut pas utiliser le GPU Apple Silicon (Metal)
+
+### Cause
+Sous Docker sur Mac, les conteneurs s’exécutent dans une VM Linux. **Le GPU Metal (M1/M2/M3/M4) n’est pas exposé** aux conteneurs, donc Ollama en Docker tourne en CPU uniquement.
+
+### Solution : Ollama en natif sur macOS
+
+Pour utiliser le **GPU Metal** sur Mac Mini M4 (ou autre M-series), il faut faire tourner **Ollama en natif** sur macOS, pas dans Docker. Le backend continue d’appeler `http://localhost:11434` ; il suffit qu’Ollama écoute sur ce port.
+
+1. **Installer Ollama en natif**  
+   - Option A : [Télécharger l’app](https://ollama.com/download/mac) (recommandé, lance le service au démarrage)  
+   - Option B : `make install-ollama-mac` (script qui fait `brew install --cask ollama`, démarre le service, tire `mistral`)
+
+2. **Lancer le service** (si installé via Homebrew)  
+   ```bash
+   brew services start ollama
+   ```
+   Ou en one-shot : `ollama serve` (garder le terminal ouvert).
+
+3. **Télécharger le modèle**  
+   ```bash
+   ollama pull mistral
+   ```
+   (Ou le modèle configuré dans `LLM_MODEL`.)
+
+4. **Ne pas lancer le conteneur Ollama**  
+   Si tu utilises Ollama en natif, lance uniquement db/redis/adminer :
+   ```bash
+   docker compose -f docker-compose.dev.yml up -d db redis adminer
+   ```
+   (Le service `ollama` n’est plus dans le docker-compose ; tout se fait en natif.)
+
+5. **Vérifier que Ollama répond**  
+   `curl http://localhost:11434/api/tags` doit lister les modèles. Le backend MyFinance utilisera ce Ollama sur 11434.
+
+6. **Vérifier que Metal (GPU) est utilisé**  
+   Sur Apple Silicon, Metal est en général utilisé **par défaut**. Pour confirmer :
+   ```bash
+   make ollama-verify-metal
+   ```
+   Le script envoie un petit prompt, puis cherche « metal » dans les logs Ollama (`~/.ollama/logs/server.log` ou `~/Library/Logs/Ollama/server.log`). Si Metal n’apparaît pas et que les réponses sont lentes, forcer le backend Metal (étape 7).
+
+7. **Forcer Metal si les réponses restent lentes**  
+   Quitter l’app Ollama (menu Ollama → Quit), puis dans un terminal :
+   ```bash
+   OLLAMA_LLM_LIBRARY=metal ollama serve
+   ```
+   Garder ce terminal ouvert ; le backend MyFinance continuera d’appeler `localhost:11434`. Pour que ce réglage persiste au démarrage avec `brew services`, définir la variable dans l’environnement du service (ex. `launchctl setenv OLLAMA_LLM_LIBRARY metal` puis redémarrer Ollama) ou lancer `ollama serve` manuellement avec la variable.
+
+Résumé : **Ollama en natif sur Mac = Metal utilisé par défaut** ; **Ollama en Docker sur Mac = CPU seulement**. Vérifier avec `make ollama-verify-metal`.

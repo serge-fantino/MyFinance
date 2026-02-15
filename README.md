@@ -41,8 +41,8 @@ git clone https://github.com/<your-org>/myfinance.git
 cd myfinance
 
 # Copier la configuration
-cp .env.example .env
-# Éditer .env avec vos clés API
+cp .env.example backend/.env
+# Éditer backend/.env avec vos clés API
 
 # Lancer l'application
 docker compose up -d

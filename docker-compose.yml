@@ -39,7 +39,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file: .env
+    env_file: backend/.env
     ports:
       - "8000:8000"
     depends_on:
@@ -65,17 +65,7 @@ services:
       - ./frontend:/app
       - /app/node_modules
 
-  # ── Ollama (local LLM for classification) ─────────────
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-
 volumes:
   pgdata:
   redisdata:
   uploads:
-  ollama_data:

@@ -30,3 +30,4 @@ class Account(Base, TimestampMixin):
     # Relationships
     user = relationship("User", back_populates="accounts")
     transactions = relationship("Transaction", back_populates="account", lazy="select")
+    classification_proposals = relationship("ClassificationProposal", back_populates="account", lazy="select")
