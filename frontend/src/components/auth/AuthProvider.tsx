@@ -1,18 +1,18 @@
 /**
- * AuthProvider — initializes Keycloak and restores the user session.
+ * AuthProvider — restores the user session from Cognito tokens.
  *
  * Must wrap the entire app ABOVE the router so that AuthGuard/GuestGuard
  * can read isLoading/isAuthenticated from the store.
  *
  * Flow:
- * 1. Initialize keycloak-js with check-sso (silent check)
- * 2. If authenticated: fetch local user profile from backend → setUser
- * 3. If not authenticated: setUser(null) → isLoading becomes false
+ * 1. Check if we have tokens in localStorage (returning user)
+ * 2. If yes: attempt to refresh, fetch local profile → setUser
+ * 3. If no: setUser(null) → isLoading becomes false
  */
 import { useEffect, useRef } from "react";
 import { useAuthStore } from "../../store/auth.store";
 import { authService } from "../../services/auth.service";
-import keycloak from "../../lib/keycloak";
+import { cognito } from "../../lib/cognito";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const { setUser, isLoading } = useAuthStore();
@@ -22,37 +22,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (initialized.current) return;
     initialized.current = true;
 
-    const initKeycloak = async () => {
+    const restoreSession = async () => {
       try {
-        const authenticated = await keycloak.init({
-          onLoad: "check-sso",
-          pkceMethod: "S256",
-          silentCheckSsoRedirectUri:
-            window.location.origin + "/silent-check-sso.html",
-        });
+        if (cognito.isAuthenticated) {
+          // Try to refresh tokens (they might be expired)
+          const tokens = await cognito.refreshTokens();
+          if (tokens) {
+            // Sync profile with ID token and fetch user
+            const profile = await authService.syncProfile(tokens.id_token);
+            setUser(profile);
+            return;
+          }
 
-        if (authenticated) {
-          // Fetch (or auto-provision) the local user from backend
+          // Refresh failed but we still have tokens — try using them
           try {
             const profile = await authService.getProfile();
             setUser(profile);
+            return;
           } catch {
-            // Backend unreachable or user provisioning failed
-            setUser(null);
+            // Tokens are invalid, clear them
+            cognito.clearTokens();
           }
-        } else {
-          setUser(null);
         }
+
+        setUser(null);
       } catch (err) {
-        console.error("Keycloak init failed", err);
+        console.error("Session restore failed", err);
+        cognito.clearTokens();
         setUser(null);
       }
     };
 
-    initKeycloak();
+    restoreSession();
   }, [setUser]);
 
-  // Show a full-screen loader while Keycloak initializes
+  // Show a full-screen loader while checking auth state
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">

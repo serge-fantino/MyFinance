@@ -1,7 +1,7 @@
 /**
  * Authentication store (Zustand).
  *
- * With Keycloak, tokens are managed by keycloak-js.
+ * Tokens are managed by the Cognito OAuth2 adapter.
  * This store only holds the local user record and loading state.
  */
 import { create } from "zustand";

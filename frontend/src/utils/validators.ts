@@ -1,7 +1,7 @@
 /**
  * Zod validation schemas.
  *
- * Note: login/register validation is handled by Keycloak.
+ * Note: login/register validation is handled by Cognito Hosted UI.
  */
 import { z } from "zod";
 

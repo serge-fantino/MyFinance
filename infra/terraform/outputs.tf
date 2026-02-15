@@ -22,7 +22,3 @@ output "app_url" {
   value       = "https://${var.domain}"
 }
 
-output "keycloak_url" {
-  description = "Keycloak admin URL"
-  value       = "https://${var.keycloak_domain}"
-}

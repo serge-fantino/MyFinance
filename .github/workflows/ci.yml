@@ -51,9 +51,9 @@ jobs:
       - name: Run tests
         env:
           DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/myfinance_test
-          KEYCLOAK_URL: http://localhost:8180
-          KEYCLOAK_REALM: myfinance
-          KEYCLOAK_CLIENT_ID: myfinance-backend
+          COGNITO_REGION: eu-west-3
+          COGNITO_USER_POOL_ID: eu-west-3_TEST
+          COGNITO_CLIENT_ID: test-client-id
           APP_ENV: test
         run: pytest --cov=app --cov-report=term-missing -v
 
@@ -83,9 +83,10 @@ jobs:
 
       - name: Build
         env:
-          VITE_KEYCLOAK_URL: https://auth.myfinance.example.com
-          VITE_KEYCLOAK_REALM: myfinance
-          VITE_KEYCLOAK_CLIENT_ID: myfinance-frontend
+          VITE_COGNITO_REGION: eu-west-3
+          VITE_COGNITO_USER_POOL_ID: eu-west-3_TEST
+          VITE_COGNITO_CLIENT_ID: test-client-id
+          VITE_COGNITO_DOMAIN: test.auth.eu-west-3.amazoncognito.com
         run: npm run build
 
   # ── Docker Build ──────────────────────────────────

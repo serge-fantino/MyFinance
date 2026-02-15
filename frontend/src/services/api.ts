@@ -1,11 +1,11 @@
 /**
- * Axios instance configured with Keycloak auth interceptors.
+ * Axios instance configured with Cognito auth interceptors.
  *
- * The access token is fetched from the Keycloak adapter (not localStorage).
- * On 401, we attempt to refresh the token via Keycloak before retrying.
+ * The access token is fetched from Cognito adapter (localStorage).
+ * On 401, we attempt to refresh the token before retrying.
  */
 import axios, { AxiosHeaders } from "axios";
-import keycloak from "../lib/keycloak";
+import { cognito } from "../lib/cognito";
 
 const api = axios.create({
   baseURL: "/api/v1",
@@ -14,27 +14,18 @@ const api = axios.create({
   },
 });
 
-// Request interceptor: attach Keycloak access token
-api.interceptors.request.use(async (config) => {
-  if (keycloak.authenticated) {
-    // Refresh the token if it expires within 30 seconds
-    try {
-      await keycloak.updateToken(30);
-    } catch {
-      // Token refresh failed — Keycloak will handle re-login
+// Request interceptor: attach Cognito access token
+api.interceptors.request.use((config) => {
+  const token = cognito.accessToken;
+  if (token) {
+    if (!config.headers) {
+      config.headers = new AxiosHeaders();
     }
-
-    const token = keycloak.token;
-    if (token) {
-      if (!config.headers) {
-        config.headers = new AxiosHeaders();
-      }
-      if (config.headers instanceof AxiosHeaders) {
-        config.headers.set("Authorization", `Bearer ${token}`);
-      } else {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (config.headers as any).Authorization = `Bearer ${token}`;
-      }
+    if (config.headers instanceof AxiosHeaders) {
+      config.headers.set("Authorization", `Bearer ${token}`);
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (config.headers as any).Authorization = `Bearer ${token}`;
     }
   }
   return config;
@@ -51,18 +42,19 @@ api.interceptors.response.use(
       originalRequest._retry = true;
 
       try {
-        // Try to refresh the token via Keycloak
-        const refreshed = await keycloak.updateToken(-1); // Force refresh
-        if (refreshed && keycloak.token) {
+        const tokens = await cognito.refreshTokens();
+        if (tokens) {
           if (!originalRequest.headers) originalRequest.headers = {};
-          originalRequest.headers.Authorization = `Bearer ${keycloak.token}`;
+          originalRequest.headers.Authorization = `Bearer ${tokens.access_token}`;
           return api(originalRequest);
         }
       } catch {
-        // Refresh failed — redirect to Keycloak login
-        keycloak.login();
-        return Promise.reject(error);
+        // Refresh failed
       }
+
+      // Redirect to Cognito login
+      cognito.login();
+      return Promise.reject(error);
     }
     return Promise.reject(error);
   }

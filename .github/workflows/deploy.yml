@@ -25,19 +25,9 @@ jobs:
             cd /opt/myfinance
             git pull origin main
 
-            # Rebuild and restart all services (including Keycloak)
+            # Rebuild and restart services
             docker compose pull
             docker compose up -d --build
-
-            # Wait for Keycloak to be healthy before running migrations
-            echo "Waiting for Keycloak to be ready..."
-            for i in $(seq 1 30); do
-              if docker compose exec -T keycloak curl -sf http://localhost:8180/health/ready > /dev/null 2>&1; then
-                echo "Keycloak is ready."
-                break
-              fi
-              sleep 5
-            done
 
             # Run database migrations
             docker compose exec -T backend alembic upgrade head

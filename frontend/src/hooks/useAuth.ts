@@ -1,32 +1,28 @@
 /**
- * Authentication hook — provides login, register, logout actions via Keycloak.
+ * Authentication hook — provides login, register, logout actions via Cognito.
  *
- * Login and register redirect to the Keycloak UI.
- * Logout clears the local store and calls Keycloak logout.
+ * Login and register redirect to the Cognito Hosted UI.
+ * Logout clears the local store and calls Cognito logout.
  */
 import { useCallback } from "react";
 import { useAuthStore } from "../store/auth.store";
-import keycloak from "../lib/keycloak";
+import { cognito } from "../lib/cognito";
 
 export function useAuth() {
   const { user, isAuthenticated, logout: clearStore } = useAuthStore();
 
   const login = useCallback(() => {
-    keycloak.login({ redirectUri: window.location.origin + "/dashboard" });
+    cognito.login();
   }, []);
 
   const register = useCallback(() => {
-    keycloak.register({ redirectUri: window.location.origin + "/dashboard" });
+    cognito.register();
   }, []);
 
   const logout = useCallback(() => {
     clearStore();
-    keycloak.logout({ redirectUri: window.location.origin + "/login" });
+    cognito.logout();
   }, [clearStore]);
-
-  const accountManagement = useCallback(() => {
-    keycloak.accountManagement();
-  }, []);
 
   return {
     user,
@@ -34,6 +30,5 @@ export function useAuth() {
     login,
     register,
     logout,
-    accountManagement,
   };
 }

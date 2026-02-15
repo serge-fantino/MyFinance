@@ -1,8 +1,8 @@
 /**
  * LoginPage — landing page for unauthenticated users.
  *
- * With Keycloak, there's no local login form. This page shows branding
- * and a button to redirect to Keycloak's login UI (which supports
+ * With Cognito, there's no local login form. This page shows branding
+ * and a button to redirect to Cognito's Hosted UI (which supports
  * email/password, MFA, social login, passkeys, etc.).
  */
 import { useAuth } from "../../hooks/useAuth";

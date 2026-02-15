@@ -4,7 +4,7 @@
 # Usage: make <target>
 # Run `make help` to see all available commands.
 
-.PHONY: help setup dev dev-infra dev-back dev-front stop test test-back test-front lint lint-back lint-front db-migrate db-upgrade db-downgrade clean docker-up docker-down keycloak-logs
+.PHONY: help setup dev dev-infra dev-back dev-front stop test test-back test-front lint lint-back lint-front db-migrate db-upgrade db-downgrade clean docker-up docker-down
 
 # ── Python venv activation ────────────────────────────
 # All backend commands run through the virtualenv
@@ -38,13 +38,15 @@ setup: ## First-time project setup (installs everything)
 dev: ## Start full dev environment (infra + back + front)
 	@./scripts/dev.sh
 
-dev-infra: ## Start infrastructure only (PostgreSQL + Redis + Keycloak + Adminer)
+dev-infra: ## Start infrastructure only (PostgreSQL + Redis + Adminer)
 	docker compose -f docker-compose.dev.yml up -d
 	@echo ""
-	@echo "  ✓ PostgreSQL : localhost:5432"
-	@echo "  ✓ Redis      : localhost:6379"
-	@echo "  ✓ Keycloak   : http://localhost:8180 (admin/admin)"
-	@echo "  ✓ Adminer    : http://localhost:8080"
+	@echo "  PostgreSQL : localhost:5432"
+	@echo "  Redis      : localhost:6379"
+	@echo "  Adminer    : http://localhost:8080"
+	@echo ""
+	@echo "  Auth is handled by Amazon Cognito (managed service)."
+	@echo "  Configure your Cognito settings in .env and frontend/.env"
 	@echo ""
 
 dev-back: ## Start backend only (FastAPI with hot-reload)
@@ -59,7 +61,7 @@ stop: ## Stop all dev services
 	@echo "Killing backend/frontend processes..."
 	-@pkill -f "uvicorn app.main:app" 2>/dev/null || true
 	-@pkill -f "vite" 2>/dev/null || true
-	@echo "✓ All services stopped"
+	@echo "All services stopped"
 
 # ═══════════════════════════════════════════════════════
 # TESTING
@@ -87,7 +89,7 @@ lint-front: ## Lint frontend (eslint)
 
 format: ## Auto-format all code
 	cd backend && ../$(RUFF) format . && ../$(RUFF) check --fix .
-	@echo "✓ Backend formatted"
+	@echo "Backend formatted"
 
 # ═══════════════════════════════════════════════════════
 # DATABASE
@@ -103,12 +105,12 @@ db-downgrade: ## Rollback last migration
 	cd backend && ../$(ALEMBIC) downgrade -1
 
 db-reset: ## Reset database (drop + recreate + migrate)
-	@echo "⚠️  This will DELETE all data. Press Ctrl+C to cancel..."
+	@echo "This will DELETE all data. Press Ctrl+C to cancel..."
 	@sleep 3
 	docker compose -f docker-compose.dev.yml exec db psql -U myfinance -c "DROP DATABASE IF EXISTS myfinance;"
 	docker compose -f docker-compose.dev.yml exec db psql -U myfinance -d postgres -c "CREATE DATABASE myfinance;"
 	cd backend && ../$(ALEMBIC) upgrade head
-	@echo "✓ Database reset complete"
+	@echo "Database reset complete"
 
 # ═══════════════════════════════════════════════════════
 # DOCKER (full stack, containerized)
@@ -117,9 +119,9 @@ db-reset: ## Reset database (drop + recreate + migrate)
 docker-up: ## Start all services in Docker (production-like)
 	docker compose up -d --build
 	@echo ""
-	@echo "  ✓ Frontend : http://localhost:3000"
-	@echo "  ✓ Backend  : http://localhost:8000"
-	@echo "  ✓ API Docs : http://localhost:8000/docs"
+	@echo "  Frontend : http://localhost:3000"
+	@echo "  Backend  : http://localhost:8000"
+	@echo "  API Docs : http://localhost:8000/docs"
 	@echo ""
 
 docker-down: ## Stop all Docker services
@@ -127,9 +129,6 @@ docker-down: ## Stop all Docker services
 
 docker-logs: ## Tail logs for all Docker services
 	docker compose logs -f
-
-keycloak-logs: ## Tail Keycloak logs (dev)
-	docker compose -f docker-compose.dev.yml logs -f keycloak
 
 # ═══════════════════════════════════════════════════════
 # CLEANUP
@@ -140,9 +139,9 @@ clean: ## Remove all generated files and caches
 	rm -rf backend/__pycache__ backend/.pytest_cache backend/.ruff_cache backend/htmlcov
 	find backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	rm -rf frontend/dist
-	@echo "✓ Clean complete"
+	@echo "Clean complete"
 
-clean-docker: ## Remove all Docker volumes (⚠️ deletes data)
+clean-docker: ## Remove all Docker volumes (deletes data)
 	-@docker compose -f docker-compose.dev.yml down -v 2>/dev/null || true
 	-@docker compose down -v 2>/dev/null || true
-	@echo "✓ Docker volumes removed"
+	@echo "Docker volumes removed"

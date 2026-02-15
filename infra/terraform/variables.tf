@@ -25,12 +25,6 @@ variable "domain" {
   default     = "myfinance.example.com"
 }
 
-variable "keycloak_domain" {
-  description = "Subdomain for Keycloak (auth server)"
-  type        = string
-  default     = "auth.myfinance.example.com"
-}
-
 variable "location" {
   description = "Hetzner datacenter location"
   type        = string
@@ -38,9 +32,9 @@ variable "location" {
 }
 
 variable "server_type" {
-  description = "Server type (size). cx32 recommended for Keycloak (4 vCPU, 8 GB RAM)"
+  description = "Server type (size). cx22 is sufficient without Keycloak (2 vCPU, 4 GB RAM)"
   type        = string
-  default     = "cx32" # 4 vCPU, 8 GB RAM — ~7.49€/month
+  default     = "cx22" # 2 vCPU, 4 GB RAM — ~4.35€/month
 }
 
 variable "volume_size" {

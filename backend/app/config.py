@@ -17,10 +17,10 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
-    # Keycloak (OIDC)
-    keycloak_url: str = "http://localhost:8180"
-    keycloak_realm: str = "myfinance"
-    keycloak_client_id: str = "myfinance-backend"
+    # Cognito (OIDC)
+    cognito_region: str = "eu-west-3"
+    cognito_user_pool_id: str = ""
+    cognito_client_id: str = ""
 
     # OpenAI
     openai_api_key: str = ""
@@ -37,12 +37,12 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",")]
 
     @property
-    def keycloak_issuer_url(self) -> str:
-        return f"{self.keycloak_url}/realms/{self.keycloak_realm}"
+    def cognito_issuer_url(self) -> str:
+        return f"https://cognito-idp.{self.cognito_region}.amazonaws.com/{self.cognito_user_pool_id}"
 
     @property
-    def keycloak_jwks_url(self) -> str:
-        return f"{self.keycloak_issuer_url}/protocol/openid-connect/certs"
+    def cognito_jwks_url(self) -> str:
+        return f"{self.cognito_issuer_url}/.well-known/jwks.json"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

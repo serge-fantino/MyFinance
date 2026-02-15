@@ -2,6 +2,7 @@
 # ─────────────────────────────────────────────────────
 # Cloud-init script for MyFinance server
 # Provisions: Docker, Caddy (reverse proxy + TLS), data volumes
+# Auth is handled by Amazon Cognito (managed service)
 # ─────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -29,7 +30,6 @@ mount -a
 # Create data directories
 mkdir -p /mnt/data/postgres
 mkdir -p /mnt/data/redis
-mkdir -p /mnt/data/keycloak-postgres
 mkdir -p /mnt/data/backups
 chown -R myfinance:myfinance /mnt/data
 
@@ -54,17 +54,12 @@ ${domain} {
         reverse_proxy localhost:3000
     }
 }
-
-# ── Keycloak (auth subdomain) ─────────────────────
-${keycloak_domain} {
-    reverse_proxy localhost:8180
-}
 CADDYEOF
 
 systemctl enable caddy
 systemctl restart caddy
 
-# Set up basic swap (helps Keycloak on small instances)
+# Set up basic swap
 if [ ! -f /swapfile ]; then
     fallocate -l 1G /swapfile
     chmod 600 /swapfile
@@ -73,4 +68,4 @@ if [ ! -f /swapfile ]; then
     echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
 fi
 
-echo "✅ MyFinance server provisioning complete"
+echo "MyFinance server provisioning complete"

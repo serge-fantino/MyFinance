@@ -1,7 +1,7 @@
 /**
- * RegisterPage — redirects to Keycloak registration.
+ * RegisterPage — redirects to Cognito Hosted UI registration.
  *
- * Since registration is handled by Keycloak, this page acts as a redirect.
+ * Since registration is handled by Cognito, this page acts as a redirect.
  * It also shows a brief landing UI while the redirect happens.
  */
 import { useEffect } from "react";

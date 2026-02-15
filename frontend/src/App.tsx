@@ -4,6 +4,7 @@ import { GuestGuard } from "./components/auth/GuestGuard";
 import { AppLayout } from "./components/layout/AppLayout";
 import LoginPage from "./pages/auth/LoginPage";
 import RegisterPage from "./pages/auth/RegisterPage";
+import AuthCallbackPage from "./pages/auth/AuthCallbackPage";
 import DashboardPage from "./pages/dashboard/DashboardPage";
 import AccountsPage from "./pages/accounts/AccountsPage";
 import TransactionsPage from "./pages/transactions/TransactionsPage";
@@ -31,6 +32,8 @@ function App() {
             </GuestGuard>
           }
         />
+        {/* OAuth2 callback from Cognito */}
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
         {/* Protected routes */}
         <Route

@@ -1,0 +1,313 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  MyFinance — AWS Infrastructure (EC2 + Cognito).
+  Low-cost deployment: single EC2 with Docker Compose + Amazon Cognito for auth.
+
+# ═══════════════════════════════════════════════════════
+# Parameters
+# ═══════════════════════════════════════════════════════
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [production, staging]
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    Description: >
+      t3.micro = Free Tier 1 year (1GB RAM — tight, needs swap).
+      t3.small = 2GB RAM (~17$/month, recommended).
+    AllowedValues: [t3.micro, t3.small, t3.medium, t4g.micro, t4g.small]
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 Key Pair for SSH access
+
+  SSHAllowedCIDR:
+    Type: String
+    Default: "0.0.0.0/0"
+    Description: CIDR block allowed to SSH (restrict to your IP for security)
+
+  DomainName:
+    Type: String
+    Default: myfinance.example.com
+    Description: Domain name for the application (must be configured in DNS after deploy)
+
+  CognitoCallbackURL:
+    Type: String
+    Default: https://myfinance.example.com
+    Description: Frontend URL for Cognito OAuth callbacks
+
+  VolumeSize:
+    Type: Number
+    Default: 20
+    MinValue: 8
+    Description: EBS volume size in GB
+
+# ═══════════════════════════════════════════════════════
+# Mappings — Latest Amazon Linux 2023 AMI per region
+# ═══════════════════════════════════════════════════════
+Mappings:
+  RegionAMI:
+    eu-west-1:
+      AMI: ami-0a422d70f727fe93e
+    eu-west-3:
+      AMI: ami-0302ba5f40ebdab68
+    eu-central-1:
+      AMI: ami-0a628e1e89aaedf80
+    us-east-1:
+      AMI: ami-0c7217cdde317cfec
+    us-west-2:
+      AMI: ami-008fe2fc65df48dac
+
+# ═══════════════════════════════════════════════════════
+# Resources
+# ═══════════════════════════════════════════════════════
+Resources:
+
+  # ── Cognito User Pool ─────────────────────────────────
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub myfinance-${Environment}
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      MfaConfiguration: OPTIONAL
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
+          AttributeDataType: String
+        - Name: name
+          Required: true
+          Mutable: true
+          AttributeDataType: String
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      UserPoolAddOns:
+        AdvancedSecurityMode: AUDIT
+      DeletionProtection: ACTIVE
+
+  # ── Cognito User Pool Domain (Hosted UI) ──────────────
+  CognitoUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      Domain: !Sub myfinance-${Environment}-${AWS::AccountId}
+
+  # ── Cognito User Pool Client (Frontend SPA) ───────────
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: myfinance-frontend
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      SupportedIdentityProviders:
+        - COGNITO
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      CallbackURLs:
+        - !Ref CognitoCallbackURL
+        - http://localhost:3000
+        - http://localhost:5173
+      LogoutURLs:
+        - !Sub ${CognitoCallbackURL}/login
+        - http://localhost:3000/login
+        - http://localhost:5173/login
+      PreventUserExistenceErrors: ENABLED
+      AccessTokenValidity: 30
+      IdTokenValidity: 30
+      RefreshTokenValidity: 7
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+
+  # ── Security Group ────────────────────────────────────
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MyFinance application server
+      GroupName: !Sub myfinance-${Environment}-sg
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHAllowedCIDR
+          Description: SSH access
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS
+      Tags:
+        - Key: Name
+          Value: !Sub myfinance-${Environment}-sg
+
+  # ── Elastic IP ────────────────────────────────────────
+  AppEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub myfinance-${Environment}-eip
+
+  # ── EC2 Instance ──────────────────────────────────────
+  AppInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !FindInMap [RegionAMI, !Ref "AWS::Region", AMI]
+      KeyName: !Ref KeyPairName
+      SecurityGroupIds:
+        - !GetAtt AppSecurityGroup.GroupId
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref VolumeSize
+            VolumeType: gp3
+            Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub myfinance-${Environment}
+        - Key: Project
+          Value: myfinance
+        - Key: Environment
+          Value: !Ref Environment
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+
+          # Update system
+          dnf update -y
+
+          # Install Docker
+          dnf install -y docker
+          systemctl enable docker
+          systemctl start docker
+
+          # Install Docker Compose plugin
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+          # Install Caddy
+          dnf install -y 'dnf-command(copr)'
+          dnf copr enable -y @caddy/caddy
+          dnf install -y caddy
+
+          # Create app user
+          useradd -m -s /bin/bash myfinance
+          usermod -aG docker myfinance
+
+          # Create app directory
+          mkdir -p /opt/myfinance
+          chown myfinance:myfinance /opt/myfinance
+
+          # Create data directories
+          mkdir -p /opt/myfinance/data/{postgres,redis,backups}
+          chown -R myfinance:myfinance /opt/myfinance/data
+
+          # Set up swap (essential for t3.micro with 1GB RAM)
+          if [ ! -f /swapfile ]; then
+            fallocate -l 2G /swapfile
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+            echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
+          fi
+
+          # Configure Caddy
+          cat > /etc/caddy/Caddyfile << 'CADDYEOF'
+          ${DomainName} {
+              handle /api/* {
+                  reverse_proxy localhost:8000
+              }
+              handle {
+                  reverse_proxy localhost:3000
+              }
+          }
+          CADDYEOF
+
+          systemctl enable caddy
+          systemctl start caddy
+
+          echo "MyFinance server provisioning complete"
+
+  # ── Attach Elastic IP to Instance ─────────────────────
+  AppEIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt AppEIP.AllocationId
+      InstanceId: !Ref AppInstance
+
+# ═══════════════════════════════════════════════════════
+# Outputs
+# ═══════════════════════════════════════════════════════
+Outputs:
+  ServerIP:
+    Description: Public IP of the application server
+    Value: !Ref AppEIP
+
+  AppURL:
+    Description: Application URL (configure DNS to point to ServerIP)
+    Value: !Sub https://${DomainName}
+
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID (for backend config)
+    Value: !Ref CognitoUserPool
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolId
+
+  CognitoUserPoolClientId:
+    Description: Cognito User Pool Client ID (for frontend config)
+    Value: !Ref CognitoUserPoolClient
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolClientId
+
+  CognitoHostedUIDomain:
+    Description: Cognito Hosted UI domain
+    Value: !Sub https://${CognitoUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com
+
+  CognitoIssuerURL:
+    Description: OIDC Issuer URL (for backend token validation)
+    Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPool}
+
+  SSHCommand:
+    Description: SSH command to connect to the server
+    Value: !Sub ssh ec2-user@${AppEIP}
+
+  DNSInstructions:
+    Description: DNS configuration needed
+    Value: !Sub >
+      Create an A record: ${DomainName} -> ${AppEIP}
