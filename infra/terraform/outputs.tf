@@ -16,3 +16,13 @@ output "volume_id" {
   description = "Data volume ID"
   value       = hcloud_volume.data.id
 }
+
+output "app_url" {
+  description = "Application URL"
+  value       = "https://${var.domain}"
+}
+
+output "keycloak_url" {
+  description = "Keycloak admin URL"
+  value       = "https://${var.keycloak_domain}"
+}

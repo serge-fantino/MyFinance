@@ -1,6 +1,7 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────
 # Cloud-init script for MyFinance server
+# Provisions: Docker, Caddy (reverse proxy + TLS), data volumes
 # ─────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -28,6 +29,7 @@ mount -a
 # Create data directories
 mkdir -p /mnt/data/postgres
 mkdir -p /mnt/data/redis
+mkdir -p /mnt/data/keycloak-postgres
 mkdir -p /mnt/data/backups
 chown -R myfinance:myfinance /mnt/data
 
@@ -37,15 +39,38 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmo
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
 apt-get update && apt-get install -y caddy
 
-# Configure Caddy
-cat > /etc/caddy/Caddyfile << 'EOF'
+# Configure Caddy — reverse proxy for all services
+# Caddy handles automatic TLS via Let's Encrypt
+cat > /etc/caddy/Caddyfile << 'CADDYEOF'
+# ── MyFinance Application ──────────────────────────
 ${domain} {
-    reverse_proxy /api/* localhost:8000
-    reverse_proxy localhost:3000
+    # API requests → FastAPI backend
+    handle /api/* {
+        reverse_proxy localhost:8000
+    }
+
+    # Everything else → React frontend (nginx)
+    handle {
+        reverse_proxy localhost:3000
+    }
 }
-EOF
+
+# ── Keycloak (auth subdomain) ─────────────────────
+${keycloak_domain} {
+    reverse_proxy localhost:8180
+}
+CADDYEOF
 
 systemctl enable caddy
 systemctl restart caddy
+
+# Set up basic swap (helps Keycloak on small instances)
+if [ ! -f /swapfile ]; then
+    fallocate -l 1G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
+fi
 
 echo "✅ MyFinance server provisioning complete"

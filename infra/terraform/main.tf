@@ -68,8 +68,9 @@ resource "hcloud_server" "app" {
   firewall_ids = [hcloud_firewall.web.id]
 
   user_data = templatefile("${path.module}/user-data.sh", {
-    domain      = var.domain
-    volume_id   = hcloud_volume.data.id
+    domain           = var.domain
+    keycloak_domain  = var.keycloak_domain
+    volume_id        = hcloud_volume.data.id
   })
 
   labels = {
