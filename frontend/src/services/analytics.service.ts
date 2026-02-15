@@ -4,7 +4,7 @@
 import api from "./api";
 
 export interface CategoryBreakdown {
-  category_id: number;
+  category_id: number | null;
   category_name: string;
   parent_id: number | null;
   parent_name: string | null;

@@ -4,7 +4,10 @@
 # Usage: make <target>
 # Run `make help` to see all available commands.
 
-.PHONY: help setup dev dev-infra dev-back dev-front stop test test-back test-front lint lint-back lint-front db-migrate db-upgrade db-downgrade clean docker-up docker-down
+.PHONY: help setup dev dev-infra dev-back dev-front stop test test-back test-front lint lint-back lint-front db-migrate db-upgrade db-downgrade clean docker-up docker-down ollama-pull ollama-status ollama-check ollama-verify-metal ollama-test-interactive ollama-native-mac install-ollama-mac
+
+# Default LLM model for Ollama (override with make ollama-pull LLM_MODEL=llama3.2)
+LLM_MODEL ?= mistral
 
 # ── Python venv activation ────────────────────────────
 # All backend commands run through the virtualenv
@@ -59,6 +62,58 @@ stop: ## Stop all dev services
 	-@pkill -f "uvicorn app.main:app" 2>/dev/null || true
 	-@pkill -f "vite" 2>/dev/null || true
 	@echo "✓ All services stopped"
+
+ # ═══════════════════════════════════════════════════════
+ # OLLAMA (LLM local pour suggestions de classification)
+ # ═══════════════════════════════════════════════════════
+
+ollama-pull: ## Télécharger le modèle LLM sur l’instance Ollama locale (usage: make ollama-pull ou make ollama-pull LLM_MODEL=llama3.2)
+	ollama pull $(LLM_MODEL)
+	@echo "✓ Modèle $(LLM_MODEL) prêt (Ollama local)"
+
+ollama-status: ## Vérifier si Ollama local tourne et lister les modèles
+	@ollama list 2>/dev/null || echo "Ollama non disponible (binaire 'ollama' introuvable ou service arrêté). Voir: make install-ollama-mac / make ollama-native-mac"
+
+ollama-check: ## Vérifier qu’Ollama est joignable et que l’app MyFinance pourra l’utiliser
+	@echo ""
+	@echo "  Vérification Ollama pour MyFinance"
+	@echo "  ─────────────────────────────────"
+	@URL="http://localhost:11434"; \
+	if curl -s --connect-timeout 2 "$$URL/api/tags" >/dev/null 2>&1; then \
+	  echo "  ✓ Ollama joignable sur $$URL"; \
+	  MODELS=$$(curl -s "$$URL/api/tags" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(' '.join(m.get('name','').split(':')[0] for m in d.get('models',[])))" 2>/dev/null); \
+	  echo "  ✓ Modèles disponibles : $$MODELS"; \
+	  if echo "$$MODELS" | grep -q "mistral"; then echo "  ✓ Modèle 'mistral' présent (défaut LLM_MODEL)"; else echo "  ⚠ Modèle 'mistral' absent → faire: make ollama-pull"; fi; \
+	  echo ""; \
+	  echo "  L’app utilise par défaut : LLM_BASE_URL=$$URL, LLM_MODEL=mistral"; \
+	  echo "  Pour tester : lancer MyFinance (make dev), ouvrir Suggestions, cliquer « Interpréter (LLM) » sur un cluster."; \
+	else \
+	  echo "  ✗ Ollama non joignable sur $$URL"; \
+	  echo "  → Démarrer Ollama : ouvrir l’app Ollama ou faire: brew services start ollama"; \
+	  echo "  → Puis : make ollama-pull"; \
+	fi
+	@echo ""
+
+ollama-native-mac: ## Afficher les instructions pour Ollama en natif sur Mac (GPU Metal M1/M2/M3/M4)
+	@echo ""
+	@echo "  Sur Mac M-series, Ollama en Docker tourne en CPU uniquement (pas de Metal)."
+	@echo "  Pour utiliser le GPU :"
+	@echo ""
+	@echo "    1. Installer Ollama : https://ollama.com/download/mac  (ou: brew install --cask ollama)"
+	@echo "    2. Lancer Ollama (app ou: brew services start ollama)"
+	@echo "    3. Télécharger le modèle : ollama pull $(LLM_MODEL)"
+	@echo ""
+	@echo "  Le backend utilisera localhost:11434 (déjà configuré). Voir docs/TROUBLESHOOTING.md §8."
+	@echo ""
+
+install-ollama-mac: ## Script d’installation d’Ollama en natif sur Mac (GPU Metal)
+	@./scripts/install_ollama_mac.sh
+
+ollama-verify-metal: ## Vérifier qu’Ollama utilise Metal (GPU) sur Mac M-series
+	@./scripts/ollama_verify_metal.sh $(LLM_MODEL)
+
+ollama-test-interactive: ## Tester Ollama en interactif et vérifier l’optimisation Metal (Mac)
+	@./scripts/ollama_test_metal.sh $(LLM_MODEL)
 
 # ═══════════════════════════════════════════════════════
 # TESTING

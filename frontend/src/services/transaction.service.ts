@@ -5,9 +5,16 @@ import api from "./api";
 import type {
   CashflowDaily,
   CashflowMonthly,
-  ClassifyResult,
+  ClusterClassifyRequest,
+  ClusterClassifyResult,
+  ClustersResponse,
+  ComputeEmbeddingsResult,
   ImportResult,
+  InterpretClusterRequest,
+  InterpretClusterResult,
+  LlmStatusResponse,
   PaginatedTransactions,
+  ParseLabelsResult,
   Transaction,
   TransactionCreate,
   TransactionFilter,
@@ -62,10 +69,48 @@ export const transactionService = {
     return response.data;
   },
 
-  async classify(accountId?: number): Promise<ClassifyResult> {
-    const response = await api.post("/transactions/classify", null, {
+  // ── Label parsing & embedding classification ───────
+
+  async parseLabels(accountId?: number, force = false): Promise<ParseLabelsResult> {
+    const params: Record<string, unknown> = {};
+    if (accountId) params.account_id = accountId;
+    if (force) params.force = true;
+    const response = await api.post("/transactions/parse-labels", null, { params });
+    return response.data;
+  },
+
+  async computeEmbeddings(accountId?: number): Promise<ComputeEmbeddingsResult> {
+    const response = await api.post("/transactions/compute-embeddings", null, {
       params: accountId ? { account_id: accountId } : {},
     });
+    return response.data;
+  },
+
+  async getClusters(
+    accountId?: number,
+    minClusterSize?: number,
+    distanceThreshold?: number
+  ): Promise<ClustersResponse> {
+    const params: Record<string, unknown> = {};
+    if (accountId) params.account_id = accountId;
+    if (minClusterSize) params.min_cluster_size = minClusterSize;
+    if (distanceThreshold != null) params.distance_threshold = distanceThreshold;
+    const response = await api.get("/transactions/clusters", { params });
+    return response.data;
+  },
+
+  async classifyCluster(data: ClusterClassifyRequest): Promise<ClusterClassifyResult> {
+    const response = await api.post("/transactions/clusters/classify", data);
+    return response.data;
+  },
+
+  async interpretCluster(data: InterpretClusterRequest): Promise<InterpretClusterResult> {
+    const response = await api.post("/transactions/clusters/interpret", data);
+    return response.data;
+  },
+
+  async getLlmStatus(): Promise<LlmStatusResponse> {
+    const response = await api.get("/transactions/clusters/llm-status");
     return response.data;
   },
 };

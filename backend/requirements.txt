@@ -22,10 +22,16 @@ pydantic>=2.5.0
 pydantic-settings>=2.1.0
 email-validator>=2.1.0
 
-# AI
-openai>=1.12.0
-langchain>=0.1.0
-langchain-openai>=0.0.5
+# AI — OpenAI (disabled, kept for future hybrid use)
+# openai>=1.12.0
+# langchain>=0.1.0
+# langchain-openai>=0.0.5
+
+# Embeddings — local classification (no GPU required)
+sentence-transformers>=2.2.0
+pgvector>=0.2.0
+scikit-learn>=1.3.0
+numpy>=1.24.0
 
 # File parsing
 openpyxl>=3.1.0

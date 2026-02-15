@@ -58,27 +58,27 @@ ok "Docker is running"
 
 echo ""
 
-# ── Create .env if it doesn't exist ──────────────────
+# ── Create backend/.env if it doesn't exist ──────────────────
 info "Configuring environment..."
-if [ ! -f "$ROOT_DIR/.env" ]; then
-    cp "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
+if [ ! -f "$ROOT_DIR/backend/.env" ]; then
+    cp "$ROOT_DIR/.env.example" "$ROOT_DIR/backend/.env"
     # Generate random secrets
     if command -v openssl &> /dev/null; then
         SECRET1=$(openssl rand -hex 32)
         SECRET2=$(openssl rand -hex 32)
         if [[ "$OSTYPE" == "darwin"* ]]; then
-            sed -i '' "s/change-me-to-a-random-secret-key/$SECRET1/" "$ROOT_DIR/.env"
-            sed -i '' "s/change-me-to-another-random-secret-key/$SECRET2/" "$ROOT_DIR/.env"
+            sed -i '' "s/change-me-to-a-random-secret-key/$SECRET1/" "$ROOT_DIR/backend/.env"
+            sed -i '' "s/change-me-to-another-random-secret-key/$SECRET2/" "$ROOT_DIR/backend/.env"
         else
-            sed -i "s/change-me-to-a-random-secret-key/$SECRET1/" "$ROOT_DIR/.env"
-            sed -i "s/change-me-to-another-random-secret-key/$SECRET2/" "$ROOT_DIR/.env"
+            sed -i "s/change-me-to-a-random-secret-key/$SECRET1/" "$ROOT_DIR/backend/.env"
+            sed -i "s/change-me-to-another-random-secret-key/$SECRET2/" "$ROOT_DIR/backend/.env"
         fi
-        ok ".env created with random secrets"
+        ok "backend/.env created with random secrets"
     else
-        warn ".env created from example — please update secret keys manually"
+        warn "backend/.env created from example — please update secret keys manually"
     fi
 else
-    ok ".env already exists"
+    ok "backend/.env already exists"
 fi
 
 echo ""

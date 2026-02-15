@@ -3,6 +3,7 @@
 from datetime import date
 from decimal import Decimal
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Date, ForeignKey, Index, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -27,7 +28,9 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
     dedup_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False)  # import_csv, import_excel, manual
-    ai_confidence: Mapped[str | None] = mapped_column(String(10), nullable=True)  # high, medium, low
+    ai_confidence: Mapped[str | None] = mapped_column(String(10), nullable=True)  # high, medium, low, rule, user, embedding
+    parsed_metadata: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)  # structured label metadata
+    embedding = mapped_column(Vector(384), nullable=True)  # sentence-transformers embedding
 
     # Relationships
     account = relationship("Account", back_populates="transactions")

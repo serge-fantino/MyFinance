@@ -48,6 +48,8 @@ export default function AnalyticsPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"bar" | "treemap">("bar");
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
 
   const [filters, setFilters] = useState<FilterState>({
     accountId: "",
@@ -100,6 +102,32 @@ export default function AnalyticsPage() {
   const grandTotal = useMemo(
     () => data.reduce((s, d) => s + Math.abs(d.total), 0),
     [data]
+  );
+
+  const treeRoots = useMemo(
+    () => buildAnalyticsTree(categories, data, grandTotal),
+    [categories, data, grandTotal]
+  );
+
+  // ── Chart click: select category, expand tree, scroll to row ──
+  const handleChartCategorySelect = useCallback(
+    (categoryId: number | null) => {
+      setSelectedCategoryId(categoryId);
+      const key = categoryId === null ? "uncat" : String(categoryId);
+      const path = findPathToNode(treeRoots, categoryId);
+      setExpandedIds((prev) => {
+        const next = new Set(prev);
+        next.add("total");
+        path.forEach((id) => next.add(id === null ? "uncat" : String(id)));
+        return next;
+      });
+      // Scroll to the detail table after a short delay (let React render)
+      setTimeout(() => {
+        const row = document.querySelector(`[data-category-row="${key}"]`);
+        row?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
+    },
+    [treeRoots]
   );
 
   // ── KPIs ───────────────────────────────────────────
@@ -180,8 +208,16 @@ export default function AnalyticsPage() {
         </div>
       ) : (
         <>
-          {view === "bar" && <HorizontalBarChart data={data} />}
-          {view === "treemap" && <CategoryTreemap data={data} grandTotal={grandTotal} />}
+          {view === "bar" && (
+            <HorizontalBarChart data={data} onCategorySelect={handleChartCategorySelect} />
+          )}
+          {view === "treemap" && (
+            <CategoryTreemap
+              data={data}
+              grandTotal={grandTotal}
+              onCategorySelect={handleChartCategorySelect}
+            />
+          )}
 
           {/* Detail table */}
           <DetailTable
@@ -189,6 +225,9 @@ export default function AnalyticsPage() {
             grandTotal={grandTotal}
             filters={filters}
             categories={categories}
+            expandedIds={expandedIds}
+            onExpandedIdsChange={setExpandedIds}
+            selectedCategoryId={selectedCategoryId}
             onRefresh={fetchData}
             onCategoryDropdownOpen={fetchCategories}
             onEditModalOpen={fetchCategories}
@@ -227,7 +266,13 @@ function KpiCard({
 // Horizontal Bar Chart
 // ===========================================================================
 
-function HorizontalBarChart({ data }: { data: CategoryBreakdown[] }) {
+function HorizontalBarChart({
+  data,
+  onCategorySelect,
+}: {
+  data: CategoryBreakdown[];
+  onCategorySelect?: (categoryId: number | null) => void;
+}) {
   const chartData = useMemo(
     () =>
       data.map((d, i) => ({
@@ -239,6 +284,7 @@ function HorizontalBarChart({ data }: { data: CategoryBreakdown[] }) {
         count: d.count,
         percentage: d.percentage,
         fill: pickColor(i),
+        category_id: d.category_id,
       })),
     [data]
   );
@@ -246,14 +292,30 @@ function HorizontalBarChart({ data }: { data: CategoryBreakdown[] }) {
   const barHeight = 36;
   const chartHeight = Math.max(300, chartData.length * barHeight + 60);
 
+  const handleChartClick = useCallback(
+    (state: { activePayload?: { payload?: { category_id?: number | null } }[] }) => {
+      const payload = state?.activePayload?.[0]?.payload;
+      if (payload && onCategorySelect) {
+        onCategorySelect(payload.category_id ?? null);
+      }
+    },
+    [onCategorySelect]
+  );
+
   return (
     <div className="bg-card border rounded-xl p-4">
-      <h3 className="text-sm font-semibold mb-4">Classement par montant</h3>
+      <h3 className="text-sm font-semibold mb-4">
+        Classement par montant
+        {onCategorySelect && (
+          <span className="text-xs font-normal text-muted-foreground ml-2">(cliquez pour voir les transactions)</span>
+        )}
+      </h3>
       <ResponsiveContainer width="100%" height={chartHeight}>
         <BarChart
           data={chartData}
           layout="vertical"
           margin={{ top: 4, right: 60, bottom: 4, left: 10 }}
+          onClick={onCategorySelect ? handleChartClick : undefined}
         >
           <XAxis
             type="number"
@@ -278,7 +340,7 @@ function HorizontalBarChart({ data }: { data: CategoryBreakdown[] }) {
               fontSize: "12px",
             }}
           />
-          <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={24}>
+          <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={24} cursor={onCategorySelect ? "pointer" : undefined}>
             {chartData.map((entry, idx) => (
               <Cell key={idx} fill={entry.fill} />
             ))}
@@ -353,17 +415,17 @@ function CustomTreemapContent(props: TreemapContentProps) {
 
 function CategoryTreemap({
   data,
-  grandTotal,
+  onCategorySelect,
 }: {
   data: CategoryBreakdown[];
   grandTotal: number;
+  onCategorySelect?: (categoryId: number | null) => void;
 }) {
   // Group by parent (top-level categories)
   const treemapData = useMemo(() => {
-    // Build parent groups
     const groups = new Map<
       string,
-      { name: string; children: { name: string; value: number; fill: string; percentage: number }[] }
+      { name: string; children: { name: string; value: number; fill: string; percentage: number; category_id: number | null }[] }
     >();
 
     data.forEach((d, idx) => {
@@ -378,6 +440,7 @@ function CategoryTreemap({
         value: Math.abs(d.total),
         fill: pickColor(idx),
         percentage: d.percentage,
+        category_id: d.category_id,
       });
     });
 
@@ -386,7 +449,7 @@ function CategoryTreemap({
 
   // Flatten for Recharts Treemap (it wants a flat children array at top level)
   const flatData = useMemo(() => {
-    const items: { name: string; value: number; fill: string; percentage: number }[] = [];
+    const items: { name: string; value: number; fill: string; percentage: number; category_id: number | null }[] = [];
     for (const group of treemapData) {
       for (const child of group.children) {
         items.push(child);
@@ -395,9 +458,23 @@ function CategoryTreemap({
     return items;
   }, [treemapData]);
 
+  const handleNodeClick = useCallback(
+    (node: unknown) => {
+      if (onCategorySelect && node != null && typeof node === "object" && "category_id" in node) {
+        onCategorySelect((node as { category_id?: number | null }).category_id ?? null);
+      }
+    },
+    [onCategorySelect]
+  );
+
   return (
-    <div className="bg-card border rounded-xl p-4">
-      <h3 className="text-sm font-semibold mb-4">Répartition visuelle (treemap)</h3>
+    <div className={`bg-card border rounded-xl p-4 ${onCategorySelect ? "cursor-pointer" : ""}`}>
+      <h3 className="text-sm font-semibold mb-4">
+        Répartition visuelle (treemap)
+        {onCategorySelect && (
+          <span className="text-xs font-normal text-muted-foreground ml-2">(cliquez pour voir les transactions)</span>
+        )}
+      </h3>
       <ResponsiveContainer width="100%" height={420}>
         <Treemap
           data={flatData}
@@ -405,6 +482,7 @@ function CategoryTreemap({
           aspectRatio={4 / 3}
           stroke="hsl(var(--background))"
           content={<CustomTreemapContent x={0} y={0} width={0} height={0} name="" value={0} fill="" percentage={0} />}
+          onClick={onCategorySelect ? handleNodeClick : undefined}
         />
       </ResponsiveContainer>
     </div>
@@ -412,7 +490,79 @@ function CategoryTreemap({
 }
 
 // ===========================================================================
-// Detail Table (expandable treeview)
+// Analytics tree (categories + breakdown → tree with aggregated totals)
+// ===========================================================================
+
+export interface AnalyticsTreeNode {
+  id: number | null;
+  name: string;
+  total: number;
+  count: number;
+  percentage: number;
+  children: AnalyticsTreeNode[];
+  isUncategorized?: boolean;
+}
+
+function findPathToNode(
+  roots: AnalyticsTreeNode[],
+  targetId: number | null
+): (number | null)[] {
+  function search(nodes: AnalyticsTreeNode[], path: (number | null)[]): (number | null)[] | null {
+    for (const node of nodes) {
+      const newPath = [...path, node.id];
+      if (node.id === targetId) return newPath;
+      const found = search(node.children, newPath);
+      if (found) return found;
+    }
+    return null;
+  }
+  const result = search(roots, []);
+  return result ?? [];
+}
+
+function buildAnalyticsTree(categories: Category[], breakdown: CategoryBreakdown[], grandTotal: number): AnalyticsTreeNode[] {
+  const map = new Map<number | null, { total: number; count: number }>();
+  for (const d of breakdown) {
+    map.set(d.category_id, { total: d.total, count: d.count });
+  }
+
+  function buildNode(cat: Category): AnalyticsTreeNode {
+    const direct = map.get(cat.id) ?? { total: 0, count: 0 };
+    const children = (cat.children ?? []).map(buildNode);
+    const childTotal = children.reduce((s, c) => s + c.total, 0);
+    const childCount = children.reduce((s, c) => s + c.count, 0);
+    const total = direct.total + childTotal;
+    const count = direct.count + childCount;
+    const percentage = grandTotal > 0 ? (Math.abs(total) / grandTotal) * 100 : 0;
+    return {
+      id: cat.id,
+      name: cat.name,
+      total,
+      count,
+      percentage: Math.round(percentage * 10) / 10,
+      children: children.filter((c) => c.count > 0 || c.total !== 0),
+    };
+  }
+
+  const roots: AnalyticsTreeNode[] = categories.map(buildNode).filter((n) => n.count > 0 || n.total !== 0);
+  const uncat = map.get(null);
+  if (uncat && (uncat.count > 0 || uncat.total !== 0)) {
+    const pct = grandTotal > 0 ? (Math.abs(uncat.total) / grandTotal) * 100 : 0;
+    roots.push({
+      id: null,
+      name: "Non classé",
+      total: uncat.total,
+      count: uncat.count,
+      percentage: Math.round(pct * 10) / 10,
+      children: [],
+      isUncategorized: true,
+    });
+  }
+  return roots;
+}
+
+// ===========================================================================
+// Detail Table (treeview: Total → catégories → sous-catégories → groupes → transactions)
 // ===========================================================================
 
 function DetailTable({
@@ -420,6 +570,9 @@ function DetailTable({
   grandTotal,
   filters,
   categories: rawCategories,
+  expandedIds,
+  onExpandedIdsChange,
+  selectedCategoryId,
   onRefresh,
   onCategoryDropdownOpen,
   onEditModalOpen,
@@ -428,15 +581,25 @@ function DetailTable({
   grandTotal: number;
   filters: FilterState;
   categories: Category[];
+  expandedIds: Set<string>;
+  onExpandedIdsChange: (ids: Set<string>) => void;
+  selectedCategoryId?: number | null;
   onRefresh: () => void;
   onCategoryDropdownOpen?: () => void;
   onEditModalOpen?: () => void;
 }) {
-  const [expandedCatId, setExpandedCatId] = useState<number | null | "none">("none");
-  const [detail, setDetail] = useState<LabelGroup[]>([]);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailByCat, setDetailByCat] = useState<Record<string, LabelGroup[]>>({});
+  const [detailLoadingCat, setDetailLoadingCat] = useState<number | null | "uncat">(null);
 
-  // Flat categories for dropdown
+  const treeRoots = useMemo(
+    () => buildAnalyticsTree(rawCategories, data, grandTotal),
+    [rawCategories, data, grandTotal]
+  );
+  const totalCount = useMemo(
+    () => treeRoots.reduce((s, n) => s + n.count, 0),
+    [treeRoots]
+  );
+
   const flatCategories = useMemo(() => {
     const flat: { id: number; name: string; depth: number }[] = [];
     const walk = (cats: Category[], depth: number) => {
@@ -449,30 +612,61 @@ function DetailTable({
     return flat;
   }, [rawCategories]);
 
-  const handleToggle = async (catId: number | null) => {
-    const key = catId ?? null;
-    if (expandedCatId === key) {
-      setExpandedCatId("none");
-      setDetail([]);
-      return;
-    }
-    setExpandedCatId(key);
-    setDetailLoading(true);
-    try {
-      const apiFilters: AnalyticsFilters = {};
-      if (filters.accountId) apiFilters.account_id = parseInt(filters.accountId);
-      if (filters.dateFrom) apiFilters.date_from = filters.dateFrom;
-      if (filters.dateTo) apiFilters.date_to = filters.dateTo;
-      if (filters.direction) apiFilters.direction = filters.direction as "income" | "expense";
+  const toggleExpanded = useCallback(
+    (key: string) => {
+      onExpandedIdsChange(
+        (() => {
+          const next = new Set(expandedIds);
+          if (next.has(key)) next.delete(key);
+          else next.add(key);
+          return next;
+        })()
+      );
+    },
+    [expandedIds, onExpandedIdsChange]
+  );
 
-      const result = await analyticsService.categoryDetail(catId, apiFilters);
-      setDetail(result);
-    } catch {
-      setDetail([]);
-    } finally {
-      setDetailLoading(false);
-    }
-  };
+  const loadDetail = useCallback(
+    async (catId: number | null) => {
+      const key = catId === null ? "uncat" : String(catId);
+      if (detailByCat[key]) return;
+      setDetailLoadingCat(catId === null ? "uncat" : catId);
+      try {
+        const apiFilters: AnalyticsFilters = {};
+        if (filters.accountId) apiFilters.account_id = parseInt(filters.accountId);
+        if (filters.dateFrom) apiFilters.date_from = filters.dateFrom;
+        if (filters.dateTo) apiFilters.date_to = filters.dateTo;
+        if (filters.direction) apiFilters.direction = filters.direction as "income" | "expense";
+        const result = await analyticsService.categoryDetail(catId, apiFilters);
+        setDetailByCat((prev) => ({ ...prev, [key]: result }));
+      } catch {
+        setDetailByCat((prev) => ({ ...prev, [key]: [] }));
+      } finally {
+        setDetailLoadingCat(null);
+      }
+    },
+    [filters.accountId, filters.dateFrom, filters.dateTo, filters.direction, detailByCat]
+  );
+
+  // Load detail when category is expanded from chart click
+  useEffect(() => {
+    expandedIds.forEach((key) => {
+      if (key === "total") return;
+      const catId = key === "uncat" ? null : parseInt(key, 10);
+      if (key === "uncat" || !Number.isNaN(catId)) {
+        loadDetail(catId);
+      }
+    });
+  }, [expandedIds, loadDetail]);
+
+  const handleToggleCategory = useCallback(
+    (node: AnalyticsTreeNode, key: string) => {
+      toggleExpanded(key);
+      const hasTransactions = node.count > 0 || node.total !== 0;
+      if (hasTransactions) loadDetail(node.id);
+    },
+    [toggleExpanded, loadDetail]
+  );
 
   const handleCategoryChange = async (txnId: number, newCatId: number | null) => {
     try {
@@ -480,16 +674,7 @@ function DetailTable({
         category_id: newCatId ?? undefined,
       });
       onRefresh();
-      if (expandedCatId !== "none") {
-        const catIdForRefresh = expandedCatId === null ? null : expandedCatId;
-        const apiFilters: AnalyticsFilters = {};
-        if (filters.accountId) apiFilters.account_id = parseInt(filters.accountId);
-        if (filters.dateFrom) apiFilters.date_from = filters.dateFrom;
-        if (filters.dateTo) apiFilters.date_to = filters.dateTo;
-        if (filters.direction) apiFilters.direction = filters.direction as "income" | "expense";
-        const result = await analyticsService.categoryDetail(catIdForRefresh, apiFilters);
-        setDetail(result);
-      }
+      setDetailByCat({});
     } catch {
       // ignore
     }
@@ -520,16 +705,7 @@ function DetailTable({
         rule_pattern: pattern,
       });
       onRefresh();
-      if (expandedCatId !== "none") {
-        const catIdForRefresh = expandedCatId === null ? null : expandedCatId;
-        const apiFilters: AnalyticsFilters = {};
-        if (filters.accountId) apiFilters.account_id = parseInt(filters.accountId);
-        if (filters.dateFrom) apiFilters.date_from = filters.dateFrom;
-        if (filters.dateTo) apiFilters.date_to = filters.dateTo;
-        if (filters.direction) apiFilters.direction = filters.direction as "income" | "expense";
-        const result = await analyticsService.categoryDetail(catIdForRefresh, apiFilters);
-        setDetail(result);
-      }
+      setDetailByCat({});
     } catch {
       // ignore
     }
@@ -544,16 +720,7 @@ function DetailTable({
         create_rule: false,
       });
       onRefresh();
-      if (expandedCatId !== "none") {
-        const catIdForRefresh = expandedCatId === null ? null : expandedCatId;
-        const apiFilters: AnalyticsFilters = {};
-        if (filters.accountId) apiFilters.account_id = parseInt(filters.accountId);
-        if (filters.dateFrom) apiFilters.date_from = filters.dateFrom;
-        if (filters.dateTo) apiFilters.date_to = filters.dateTo;
-        if (filters.direction) apiFilters.direction = filters.direction as "income" | "expense";
-        const result = await analyticsService.categoryDetail(catIdForRefresh, apiFilters);
-        setDetail(result);
-      }
+      setDetailByCat({});
     } catch {
       // ignore
     }
@@ -562,22 +729,22 @@ function DetailTable({
 
   const handleEditSave = async (
     id: number,
-    data: { label_clean?: string; category_id?: number | null; notes?: string | null },
+    payload: { label_clean?: string; category_id?: number | null; notes?: string | null },
   ) => {
-    await transactionService.update(id, { ...data, create_rule: false });
+    const update: Parameters<typeof transactionService.update>[1] = {
+      label_clean: payload.label_clean,
+      notes: payload.notes ?? undefined,
+      create_rule: false,
+    };
+    if (payload.category_id != null) update.category_id = payload.category_id;
+    await transactionService.update(id, update);
     onRefresh();
-    if (expandedCatId !== "none") {
-      const catIdForRefresh = expandedCatId === null ? null : expandedCatId;
-      const apiFilters: AnalyticsFilters = {};
-      if (filters.accountId) apiFilters.account_id = parseInt(filters.accountId);
-      if (filters.dateFrom) apiFilters.date_from = filters.dateFrom;
-      if (filters.dateTo) apiFilters.date_to = filters.dateTo;
-      if (filters.direction) apiFilters.direction = filters.direction as "income" | "expense";
-      const result = await analyticsService.categoryDetail(catIdForRefresh, apiFilters);
-      setDetail(result);
-    }
+    setDetailByCat({});
     setEditTransaction(null);
   };
+
+  const totalKey = "total";
+  const isTotalExpanded = expandedIds.has(totalKey);
 
   return (
     <div className="bg-card border rounded-xl overflow-hidden">
@@ -592,111 +759,49 @@ function DetailTable({
           </tr>
         </thead>
         <tbody>
-          {data.map((d, idx) => {
-            const pct = grandTotal > 0 ? (Math.abs(d.total) / grandTotal) * 100 : 0;
-            const isExpanded = expandedCatId === (d.category_id ?? null);
-            const isUncategorized = d.category_id === null;
-
-            return (
-              <>
-                {/* Category row */}
-                <tr
-                  key={`cat-${d.category_id ?? "null"}`}
-                  className={`border-b hover:bg-muted/20 transition-colors cursor-pointer ${
-                    isExpanded ? "bg-muted/30" : ""
-                  }`}
-                  onClick={() => handleToggle(d.category_id)}
-                >
-                  <td className="p-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-muted-foreground text-xs w-4">
-                        {isExpanded ? "▼" : "▶"}
-                      </span>
-                      <span
-                        className="w-3 h-3 rounded-sm flex-shrink-0"
-                        style={{ backgroundColor: isUncategorized ? "#94a3b8" : pickColor(idx) }}
-                      />
-                      <span className={`font-medium ${isUncategorized ? "italic text-muted-foreground" : ""}`}>
-                        {d.parent_name && (
-                          <span className="text-muted-foreground font-normal">
-                            {d.parent_name} &gt;{" "}
-                          </span>
-                        )}
-                        {d.category_name}
-                      </span>
-                    </div>
-                  </td>
-                  <td className={`p-3 text-right font-semibold tabular-nums ${
-                    d.total >= 0 ? "text-emerald-600" : "text-red-600"
-                  }`}>
-                    {formatCurrency(d.total)}
-                  </td>
-                  <td className="p-3 text-right text-muted-foreground tabular-nums">
-                    {d.count}
-                  </td>
-                  <td className="p-3 text-right text-muted-foreground tabular-nums">
-                    {d.percentage}%
-                  </td>
-                  <td className="p-3">
-                    <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all"
-                        style={{
-                          width: `${pct}%`,
-                          backgroundColor: isUncategorized ? "#94a3b8" : pickColor(idx),
-                        }}
-                      />
-                    </div>
-                  </td>
-                </tr>
-
-                {/* Expanded detail rows */}
-                {isExpanded && (
-                  <tr key={`detail-${d.category_id ?? "null"}`}>
-                    <td colSpan={5} className="p-0">
-                      {detailLoading ? (
-                        <div className="py-4 text-center text-xs text-muted-foreground">
-                          Chargement des détails...
-                        </div>
-                      ) : detail.length === 0 ? (
-                        <div className="py-4 text-center text-xs text-muted-foreground">
-                          Aucune transaction.
-                        </div>
-                      ) : (
-                        <div className="bg-muted/10 border-t">
-                          {detail.map((grp) => (
-                            <LabelGroupRow
-                              key={grp.label}
-                              group={grp}
-                              flatCategories={flatCategories}
-                              onCategoryChange={handleCategoryChange}
-                              onEditTransaction={openEditModal}
-                              onRequestRuleConfirm={setRuleModalPayload}
-                              onCategoryDropdownOpen={onCategoryDropdownOpen}
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                )}
-              </>
-            );
-          })}
-        </tbody>
-        <tfoot>
-          <tr className="border-t bg-muted/30 font-semibold">
-            <td className="p-3">Total</td>
-            <td className="p-3 text-right tabular-nums">
-              {formatCurrency(data.reduce((s, d) => s + d.total, 0))}
+          {/* Ligne Total global */}
+          <tr
+            className="border-b bg-muted/20 hover:bg-muted/30 cursor-pointer font-semibold"
+            onClick={() => toggleExpanded(totalKey)}
+          >
+            <td className="p-3">
+              <span className="text-muted-foreground text-xs w-4 inline-block">
+                {isTotalExpanded ? "▼" : "▶"}
+              </span>
+              <span className="ml-2">Total</span>
             </td>
-            <td className="p-3 text-right tabular-nums">
-              {data.reduce((s, d) => s + d.count, 0)}
+            <td className={`p-3 text-right tabular-nums ${grandTotal >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+              {formatCurrency(grandTotal)}
             </td>
-            <td className="p-3 text-right tabular-nums">100%</td>
-            <td className="p-3" />
+            <td className="p-3 text-right text-muted-foreground tabular-nums">{totalCount}</td>
+            <td className="p-3 text-right text-muted-foreground tabular-nums">100%</td>
+            <td className="p-3">
+              <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                <div className="h-full rounded-full bg-primary" style={{ width: "100%" }} />
+              </div>
+            </td>
           </tr>
-        </tfoot>
+
+          {isTotalExpanded &&
+            treeRoots.map((node, idx) => (
+              <TreeCategoryRow
+                key={node.id === null ? "uncat" : node.id}
+                node={node}
+                depth={0}
+                colorIndex={idx}
+                expandedIds={expandedIds}
+                selectedCategoryId={selectedCategoryId}
+                toggleExpanded={handleToggleCategory}
+                detailByCat={detailByCat}
+                detailLoadingCat={detailLoadingCat}
+                flatCategories={flatCategories}
+                onCategoryChange={handleCategoryChange}
+                onEditTransaction={openEditModal}
+                onRequestRuleConfirm={setRuleModalPayload}
+                onCategoryDropdownOpen={onCategoryDropdownOpen}
+              />
+            ))}
+        </tbody>
       </table>
 
       <EditTransactionModal
@@ -716,6 +821,149 @@ function DetailTable({
         onApplyOnly={handleApplyOnly}
       />
     </div>
+  );
+}
+
+// ===========================================================================
+// Tree category row (one level of the treeview)
+// ===========================================================================
+
+function TreeCategoryRow({
+  node,
+  depth,
+  colorIndex,
+  expandedIds,
+  selectedCategoryId,
+  toggleExpanded,
+  detailByCat,
+  detailLoadingCat,
+  flatCategories,
+  onCategoryChange,
+  onEditTransaction,
+  onRequestRuleConfirm,
+  onCategoryDropdownOpen,
+}: {
+  node: AnalyticsTreeNode;
+  depth: number;
+  colorIndex: number;
+  expandedIds: Set<string>;
+  selectedCategoryId?: number | null;
+  toggleExpanded: (node: AnalyticsTreeNode, key: string) => void;
+  detailByCat: Record<string, LabelGroup[]>;
+  detailLoadingCat: number | null | "uncat";
+  flatCategories: { id: number; name: string; depth: number }[];
+  onCategoryChange: (txnId: number, catId: number | null) => void;
+  onEditTransaction: (payload: EditTransactionPayload) => void;
+  onRequestRuleConfirm: (payload: CategoryRuleModalPayload) => void;
+  onCategoryDropdownOpen?: () => void;
+}) {
+  const key = node.id === null ? "uncat" : String(node.id);
+  const isExpanded = expandedIds.has(key);
+  const hasChildren = node.children.length > 0;
+  const hasTransactions = node.count > 0 || node.total !== 0;
+  const canExpand = hasChildren || hasTransactions;
+  const detail = detailByCat[key];
+  const isLoadingDetail = hasTransactions && detail === undefined && detailLoadingCat === (node.id === null ? "uncat" : node.id);
+  const indent = 12 + depth * 20;
+
+  const isSelected = selectedCategoryId !== undefined && node.id === selectedCategoryId;
+
+  return (
+    <>
+      <tr
+        data-category-row={key}
+        className={`border-b hover:bg-muted/20 transition-colors cursor-pointer ${isExpanded ? "bg-muted/30" : ""} ${isSelected ? "ring-2 ring-primary ring-inset" : ""}`}
+        onClick={() => toggleExpanded(node, key)}
+      >
+        <td className="p-3" style={{ paddingLeft: `${indent}px` }}>
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground text-xs w-4 inline-block">
+              {canExpand ? (isExpanded ? "▼" : "▶") : ""}
+            </span>
+            <span
+              className="w-3 h-3 rounded-sm flex-shrink-0"
+              style={{ backgroundColor: node.isUncategorized ? "#94a3b8" : pickColor(colorIndex) }}
+            />
+            <span className={`font-medium ${node.isUncategorized ? "italic text-muted-foreground" : ""}`}>
+              {node.name}
+            </span>
+          </div>
+        </td>
+        <td className={`p-3 text-right font-semibold tabular-nums ${node.total >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+          {formatCurrency(node.total)}
+        </td>
+        <td className="p-3 text-right text-muted-foreground tabular-nums">{node.count}</td>
+        <td className="p-3 text-right text-muted-foreground tabular-nums">{node.percentage}%</td>
+        <td className="p-3">
+          <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all"
+              style={{
+                width: `${Math.min(100, node.percentage)}%`,
+                backgroundColor: node.isUncategorized ? "#94a3b8" : pickColor(colorIndex),
+              }}
+            />
+          </div>
+        </td>
+      </tr>
+
+      {/* 1. Sous-catégories (enfants) */}
+      {isExpanded && hasChildren &&
+        node.children.map((child) => (
+          <TreeCategoryRow
+            key={child.id === null ? "uncat" : child.id}
+            node={child}
+            depth={depth + 1}
+            colorIndex={colorIndex}
+            expandedIds={expandedIds}
+            selectedCategoryId={selectedCategoryId}
+            toggleExpanded={toggleExpanded}
+            detailByCat={detailByCat}
+            detailLoadingCat={detailLoadingCat}
+            flatCategories={flatCategories}
+            onCategoryChange={onCategoryChange}
+            onEditTransaction={onEditTransaction}
+            onRequestRuleConfirm={onRequestRuleConfirm}
+            onCategoryDropdownOpen={onCategoryDropdownOpen}
+          />
+        ))}
+
+      {/* 2. Transactions directes (groupes de libellés) — affiché en plus des sous-catégories si présentes */}
+      {isExpanded && hasTransactions && (
+        <tr>
+          <td colSpan={5} className="p-0">
+            {isLoadingDetail ? (
+              <div className="py-4 text-center text-xs text-muted-foreground">
+                Chargement des détails...
+              </div>
+            ) : !detail || detail.length === 0 ? (
+              <div className="py-3 pl-4 text-xs text-muted-foreground border-t border-dashed">
+                Aucune transaction directe dans cette catégorie.
+              </div>
+            ) : (
+              <div className="bg-muted/10 border-t border-dashed">
+                {hasChildren && (
+                  <div className="px-4 py-2 text-xs font-medium text-muted-foreground border-b border-dashed">
+                    Transactions dans « {node.name} »
+                  </div>
+                )}
+                {detail.map((grp) => (
+                  <LabelGroupRow
+                    key={grp.label}
+                    group={grp}
+                    flatCategories={flatCategories}
+                    onCategoryChange={onCategoryChange}
+                    onEditTransaction={onEditTransaction}
+                    onRequestRuleConfirm={onRequestRuleConfirm}
+                    onCategoryDropdownOpen={onCategoryDropdownOpen}
+                  />
+                ))}
+              </div>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 

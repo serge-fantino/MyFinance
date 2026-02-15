@@ -112,6 +112,50 @@
 | 7.11 | Intégration règles → prompt IA | P1 | S | ✅ Done | Les règles de l'utilisateur sont injectées dans le prompt OpenAI comme contexte additionnel |
 | 7.12 | Rafraîchissement liste après classif. | P0 | S | ✅ Done | Après assignation manuelle + application de la règle, la liste se rafraîchit automatiquement |
 
+### Epic 7b : Classification par Embeddings (remplace l'IA OpenAI)
+
+> Voir [EMBEDDING_CLASSIFICATION.md](EMBEDDING_CLASSIFICATION.md) pour la stratégie détaillée.
+
+| # | Ticket | Priorité | Taille | Statut | Description |
+|---|--------|----------|--------|--------|-------------|
+| 7b.1 | Extension pgvector + migration | P0 | S | ✅ Done | Migration 005 : `CREATE EXTENSION vector`, colonne `embedding vector(384)` sur transactions, index HNSW |
+| 7b.2 | EmbeddingService | P0 | L | ✅ Done | Service `embedding_service.py` : calcul d'embeddings (sentence-transformers local), recherche par similarité, clustering HDBSCAN, suggestions catégorie |
+| 7b.3 | Embeddings des catégories | P0 | M | ✅ Done | Projection des noms de catégories dans l'espace d'embeddings pour suggestion sémantique a priori |
+| 7b.4 | API clustering + classification | P0 | M | ✅ Done | `POST /compute-embeddings`, `GET /clusters`, `POST /clusters/classify` |
+| 7b.5 | Intégration import → embeddings | P0 | S | ✅ Done | Après import : règles → calcul embeddings. Suggestions disponibles via `/clusters` |
+| 7b.6 | Désactivation OpenAI | P0 | S | ✅ Done | Dépendances commentées, import pipeline sans appel API |
+| 7b.7 | Documentation stratégie | P0 | M | ✅ Done | `EMBEDDING_CLASSIFICATION.md` : architecture, algorithmes, seuils, pipeline |
+| 7b.8 | UI vue clusters | P1 | L | ✅ Done | Modal de revue des clusters avec suggestions, accept/reject/modify par cluster |
+| 7b.9 | UI suggestions inline | P2 | M | 🔲 TODO | Badge suggestion sur chaque transaction non classée dans la liste |
+
+### Epic 7c : Preprocessing des libellés bancaires
+
+> Parsing classique (regex) des libellés pour extraire des métadonnées structurées avant le calcul d'embeddings.
+
+| # | Ticket | Priorité | Taille | Statut | Description |
+|---|--------|----------|--------|--------|-------------|
+| 7c.1 | Label parser service | P0 | M | ✅ Done | Service `label_parser.py` : regex pour extraire mode de paiement, tiers, carte, date depuis les libellés bancaires français |
+| 7c.2 | Migration parsed_metadata | P0 | S | ✅ Done | Migration 006 : colonne `parsed_metadata` JSONB sur transactions |
+| 7c.3 | Intégration import pipeline | P0 | S | ✅ Done | Parsing automatique à l'import, stockage des métadonnées sur chaque transaction |
+| 7c.4 | Embedding sur counterparty | P0 | S | ✅ Done | `_build_embedding_text()` utilise le tiers nettoyé (counterparty) au lieu du libellé brut complet |
+| 7c.5 | API parse-labels | P0 | S | ✅ Done | `POST /parse-labels` : parser les libellés existants (retro-compatibilité), reset embeddings |
+| 7c.6 | UI affichage métadonnées | P0 | M | ✅ Done | Badge mode de paiement + tiers nettoyé + carte dans la liste des transactions |
+| 7c.7 | Documentation | P0 | S | ✅ Done | Mise à jour SPECS, ARCHITECTURE, BACKLOG, EMBEDDING_CLASSIFICATION |
+
+### Epic 7d : Classification par LLM local (Ollama)
+
+> Remplacement de la suggestion par sémantique des catégories (naïve) par un LLM local via Ollama.
+
+| # | Ticket | Priorité | Taille | Statut | Description |
+|---|--------|----------|--------|--------|-------------|
+| 7d.1 | Service Ollama Docker | P0 | S | ✅ Done | Ajout d'Ollama dans docker-compose.dev.yml et docker-compose.yml |
+| 7d.2 | LLM service | P0 | L | ✅ Done | `llm_service.py` : client Ollama, prompt structuré, parsing réponse JSON |
+| 7d.3 | Descriptions enrichies catégories | P0 | M | ✅ Done | `category_descriptions.py` : descriptions riches avec mots-clés et exemples de marchands |
+| 7d.4 | Intégration dans EmbeddingService | P0 | M | ✅ Done | Remplacement de `_suggest_from_categories` par appel LLM dans `get_clusters()` |
+| 7d.5 | Configuration LLM | P0 | S | ✅ Done | Settings : `llm_enabled`, `llm_base_url`, `llm_model`, `llm_timeout` |
+| 7d.6 | UI explication LLM | P0 | S | ✅ Done | Affichage de l'explication LLM et du badge "IA locale" dans ClusterReviewModal |
+| 7d.7 | Documentation | P0 | S | ✅ Done | Mise à jour EMBEDDING_CLASSIFICATION, SPECS, ARCHITECTURE, BACKLOG |
+
 ### Epic 8 : Dashboard
 
 | # | Ticket | Priorité | Taille | Statut | Description |
@@ -219,6 +263,7 @@
 | 1 | 1-2 | Setup + Auth | 14 | Fondations, authentification |
 | 2 | 3-4 | Comptes + Transactions + Import | 17 | Données de base, import CSV/Excel |
 | 3 | 5-6 | Catégorisation + Dashboard | 14 | Classification IA, visualisations |
+| 3b | — | Embeddings + LLM local | 9+7+7 | Classification locale : embeddings, parsing libellés, LLM Ollama |
 | 4 | 7-8 | Analyses + Chat IA | 10 | Analyses avancées, assistant IA |
 | 5 | 9-10 | Polish + Déploiement | 12 | Qualité, sécurité, production |
 | **Total MVP** | **10 semaines** | **13 epics** | **67 tickets** | |

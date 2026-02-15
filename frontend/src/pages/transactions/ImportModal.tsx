@@ -75,10 +75,10 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                   <p className="text-2xl font-bold text-yellow-600">{result.duplicate_count}</p>
                   <p className="text-xs text-muted-foreground">Doublons ignores</p>
                 </div>
-                {result.ai_classified != null && result.ai_classified > 0 ? (
+                {result.rules_applied != null && result.rules_applied > 0 ? (
                   <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-center">
-                    <p className="text-2xl font-bold text-blue-600">{result.ai_classified}</p>
-                    <p className="text-xs text-muted-foreground">Classifiees (IA)</p>
+                    <p className="text-2xl font-bold text-blue-600">{result.rules_applied}</p>
+                    <p className="text-xs text-muted-foreground">Classifiees (regles)</p>
                   </div>
                 ) : (
                   <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-3 text-center">

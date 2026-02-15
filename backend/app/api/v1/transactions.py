@@ -5,19 +5,30 @@ from decimal import Decimal
 
 import structlog
 from fastapi import APIRouter, Depends, File, Query, UploadFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
+from app.models.transaction import Transaction
 from app.models.user import User
+from app.config import settings
 from app.schemas.transaction import (
-    ClassifyResult,
+    ClusterClassifyRequest,
+    ClusterClassifyResult,
+    ClustersResponse,
+    ComputeEmbeddingsResult,
     ImportResult,
+    InterpretClusterRequest,
+    InterpretClusterResult,
+    InterpretClusterSuggestion,
+    LlmStatusResponse,
     PaginatedResponse,
+    ParseLabelsResult,
     TransactionCreate,
     TransactionResponse,
     TransactionUpdate,
 )
-from app.services.ai_service import AIClassificationService
+from app.services.embedding_service import EmbeddingService
 from app.services.import_service import ImportService
 from app.services.transaction_service import TransactionService
 
@@ -83,19 +94,197 @@ async def get_cashflow(
     return await service.get_cashflow(current_user, account_id, granularity)
 
 
-@router.post("/classify", response_model=ClassifyResult)
-async def classify_transactions(
+# ── Embedding-based classification endpoints ─────────────
+
+
+@router.post("/parse-labels", response_model=ParseLabelsResult)
+async def parse_labels(
+    account_id: int | None = None,
+    force: bool = False,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Parse raw labels to extract structured metadata (counterparty, card, etc.).
+
+    Runs the label parser on existing transactions that haven't been parsed yet.
+    Use force=true to re-parse all transactions (useful after parser improvements).
+
+    Parsed transactions will have their embeddings reset so they are recomputed
+    using the cleaned counterparty text on the next embedding computation.
+    """
+    from app.models.account import Account
+    from app.services.label_parser import parse_label
+
+    user_accounts = select(Account.id).where(Account.user_id == current_user.id)
+    query = select(Transaction).where(
+        Transaction.account_id.in_(user_accounts),
+        Transaction.deleted_at.is_(None),
+    )
+    if account_id:
+        query = query.where(Transaction.account_id == account_id)
+    if not force:
+        query = query.where(Transaction.parsed_metadata.is_(None))
+
+    result = await db.execute(query)
+    transactions = list(result.scalars().all())
+
+    parsed_count = 0
+    for txn in transactions:
+        metadata = parse_label(txn.label_raw)
+        txn.parsed_metadata = metadata
+        # Reset embedding so it gets recomputed with cleaned counterparty text
+        txn.embedding = None
+        parsed_count += 1
+
+    await db.flush()
+
+    logger.info(
+        "labels_parsed",
+        user_id=current_user.id,
+        parsed=parsed_count,
+        total=len(transactions),
+        force=force,
+    )
+
+    return {"parsed": parsed_count, "total": len(transactions)}
+
+
+@router.post("/compute-embeddings", response_model=ComputeEmbeddingsResult)
+async def compute_embeddings(
     account_id: int | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Classify uncategorized transactions using AI.
+    """Compute embeddings for transactions that don't have one yet.
 
-    Optionally filter to a specific account. Uses the user's previous
-    manual categorizations as context for better predictions.
+    This is a prerequisite for clustering and similarity-based suggestions.
+    Embeddings are computed locally using sentence-transformers (no GPU needed).
     """
-    service = AIClassificationService(db)
-    return await service.classify_uncategorized(current_user, account_id)
+    service = EmbeddingService(db)
+    return await service.compute_missing_embeddings(current_user, account_id)
+
+
+@router.get("/clusters", response_model=ClustersResponse)
+async def get_clusters(
+    account_id: int | None = None,
+    min_cluster_size: int = Query(3, ge=2, le=50),
+    distance_threshold: float | None = Query(
+        None,
+        ge=0.08,
+        le=0.95,
+        description="Cosine distance threshold: lower = more selective (tighter clusters), higher = more grouping.",
+    ),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get clusters of similar uncategorized transactions with category suggestions.
+
+    distance_threshold: controls how strict the grouping is. Lower values (e.g. 0.25–0.35)
+    produce smaller, more homogeneous clusters; higher values (e.g. 0.6–0.7) group more loosely.
+
+    Each cluster proposes a category via k-NN on classified transactions or category semantics.
+    """
+    service = EmbeddingService(db)
+    return await service.get_clusters(
+        current_user, account_id, min_cluster_size, distance_threshold
+    )
+
+
+@router.post("/clusters/classify", response_model=ClusterClassifyResult)
+async def classify_cluster(
+    data: ClusterClassifyRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Classify a cluster (or arbitrary set) of transactions.
+
+    Applies the chosen category to all specified transactions.
+    Optionally creates a classification rule for future transactions.
+    The user always controls what gets classified — nothing is automatic.
+    """
+    service = EmbeddingService(db)
+    return await service.classify_transactions(
+        transaction_ids=data.transaction_ids,
+        category_id=data.category_id,
+        user=current_user,
+        custom_label=data.custom_label,
+        create_rule=data.create_rule,
+        rule_pattern=data.rule_pattern,
+    )
+
+
+@router.get("/clusters/llm-status", response_model=LlmStatusResponse)
+async def get_llm_status(
+    current_user: User = Depends(get_current_user),
+):
+    """Return whether the LLM (Ollama) UI is enabled. When false, frontend hides the « Interpréter (LLM) » button."""
+    return LlmStatusResponse(ui_enabled=settings.llm_ui_enabled)
+
+
+@router.post("/clusters/interpret", response_model=InterpretClusterResult)
+async def interpret_cluster(
+    data: InterpretClusterRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Invoke the local LLM to interpret a cluster and suggest a category.
+
+    Returns the raw LLM response (for debugging) and the parsed suggestion.
+    Use this from the suggestions modal to see what the LLM returns per cluster.
+    """
+    from app.services.llm_service import LLMService
+
+    embedding_service = EmbeddingService(db)
+    enriched_cats = await embedding_service._get_enriched_categories(current_user)
+
+    transactions_with_id = [
+        {"id": t.id, "label_raw": t.label_raw, "amount": t.amount, "date": t.date}
+        for t in data.transactions
+    ]
+
+    llm_service = LLMService()
+    available = await llm_service.is_available()
+    if not available:
+        from app.config import settings
+        hint = (
+            "make dev-infra (démarrer l'infra dont Ollama), puis make ollama-pull (télécharger le modèle). "
+            f"Vérifier LLM_BASE_URL (actuel : {settings.llm_base_url}), LLM_MODEL (actuel : {settings.llm_model})."
+        )
+        return InterpretClusterResult(
+            llm_available=False,
+            error=f"Ollama non disponible. {hint}",
+        )
+
+    try:
+        raw_response, suggestion = await llm_service.suggest_category_with_subselection(
+            representative_label=data.representative_label,
+            transactions=transactions_with_id,
+            categories=enriched_cats,
+        )
+        parsed = None
+        if suggestion:
+            parsed = InterpretClusterSuggestion(
+                category_id=suggestion["category_id"],
+                category_name=suggestion["category_name"],
+                confidence=suggestion.get("confidence", "medium"),
+                explanation=suggestion.get("explanation", ""),
+                suggested_include_ids=suggestion.get("suggested_include_ids"),
+            )
+        return InterpretClusterResult(
+            llm_available=True,
+            raw_response=raw_response,
+            suggestion=parsed,
+        )
+    except Exception as e:
+        logger.exception("interpret_cluster_failed")
+        return InterpretClusterResult(
+            llm_available=True,
+            raw_response=None,
+            error=str(e),
+        )
+
+
+# ── Single transaction CRUD ─────────────────────────────
 
 
 @router.get("/{transaction_id}", response_model=TransactionResponse)
@@ -132,6 +321,9 @@ async def delete_transaction(
     await service.delete_transaction(transaction_id, current_user)
 
 
+# ── Import ──────────────────────────────────────────────
+
+
 @router.post("/import", response_model=ImportResult)
 async def import_transactions(
     account_id: int,
@@ -141,8 +333,11 @@ async def import_transactions(
 ):
     """Import transactions from a file (CSV, Excel, OFX/QFX/XML).
 
-    After a successful import, automatically triggers AI classification
-    on the newly imported (uncategorized) transactions.
+    After a successful import:
+    1. Applies user classification rules (fast, deterministic)
+    2. Computes embeddings for new transactions (local, no API call)
+
+    Classification suggestions are then available via GET /clusters.
     """
     content = await file.read()
     service = ImportService(db)
@@ -153,8 +348,7 @@ async def import_transactions(
         content=content,
     )
 
-    # Auto-classify newly imported transactions (best-effort)
-    # Step 1: Apply user rules first (fast, no API call)
+    # Auto-classify with rules (fast, no API call)
     if result["imported_count"] > 0:
         try:
             from app.services.rule_service import RuleService
@@ -170,21 +364,21 @@ async def import_transactions(
             logger.warning("auto_rules_failed", error=str(e))
             result["rules_applied"] = 0
 
-    # Step 2: Then AI classification for remaining uncategorized
+    # Compute embeddings for new transactions (local, best-effort)
     if result["imported_count"] > 0:
         try:
-            ai_service = AIClassificationService(db)
-            classify_result = await ai_service.classify_uncategorized(
-                current_user, account_id, limit=result["imported_count"]
+            embedding_service = EmbeddingService(db)
+            emb_result = await embedding_service.compute_missing_embeddings(
+                current_user, account_id
             )
-            result["ai_classified"] = classify_result.get("classified", 0)
+            result["embeddings_computed"] = emb_result["computed"]
             logger.info(
-                "auto_classify_after_import",
+                "auto_embeddings_after_import",
                 imported=result["imported_count"],
-                classified=result.get("ai_classified", 0),
+                embeddings_computed=emb_result["computed"],
             )
         except Exception as e:
-            logger.warning("auto_classify_failed", error=str(e))
-            result["ai_classified"] = 0
+            logger.warning("auto_embeddings_failed", error=str(e))
+            result["embeddings_computed"] = 0
 
     return result
