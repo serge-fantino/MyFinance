@@ -1,42 +1,32 @@
 /**
- * Authentication hook — provides login, register, logout actions.
+ * Authentication hook — provides login, register, logout actions via Keycloak.
  *
- * Session restoration is handled by AuthProvider (in main.tsx).
- * This hook is for user-triggered auth actions only.
+ * Login and register redirect to the Keycloak UI.
+ * Logout clears the local store and calls Keycloak logout.
  */
 import { useCallback } from "react";
-import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "../store/auth.store";
-import { authService } from "../services/auth.service";
-import type { LoginRequest, RegisterRequest } from "../types/auth.types";
+import keycloak from "../lib/keycloak";
 
 export function useAuth() {
-  const { user, isAuthenticated, setUser, logout: clearStore } = useAuthStore();
-  const navigate = useNavigate();
+  const { user, isAuthenticated, logout: clearStore } = useAuthStore();
 
-  const login = useCallback(
-    async (data: LoginRequest) => {
-      const authData = await authService.login(data);
-      setUser(authData.user);
-      navigate("/dashboard");
-    },
-    [navigate, setUser]
-  );
+  const login = useCallback(() => {
+    keycloak.login({ redirectUri: window.location.origin + "/dashboard" });
+  }, []);
 
-  const register = useCallback(
-    async (data: RegisterRequest) => {
-      const authData = await authService.register(data);
-      setUser(authData.user);
-      navigate("/dashboard");
-    },
-    [navigate, setUser]
-  );
+  const register = useCallback(() => {
+    keycloak.register({ redirectUri: window.location.origin + "/dashboard" });
+  }, []);
 
   const logout = useCallback(() => {
-    authService.logout();
     clearStore();
-    navigate("/login");
-  }, [navigate, clearStore]);
+    keycloak.logout({ redirectUri: window.location.origin + "/login" });
+  }, [clearStore]);
+
+  const accountManagement = useCallback(() => {
+    keycloak.accountManagement();
+  }, []);
 
   return {
     user,
@@ -44,5 +34,6 @@ export function useAuth() {
     login,
     register,
     logout,
+    accountManagement,
   };
 }

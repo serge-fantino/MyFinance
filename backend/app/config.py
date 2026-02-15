@@ -17,11 +17,10 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
-    # JWT
-    jwt_secret_key: str = "change-me"
-    jwt_algorithm: str = "HS256"
-    jwt_access_token_expire_minutes: int = 30
-    jwt_refresh_token_expire_days: int = 7
+    # Keycloak (OIDC)
+    keycloak_url: str = "http://localhost:8180"
+    keycloak_realm: str = "myfinance"
+    keycloak_client_id: str = "myfinance-backend"
 
     # OpenAI
     openai_api_key: str = ""
@@ -36,6 +35,14 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",")]
+
+    @property
+    def keycloak_issuer_url(self) -> str:
+        return f"{self.keycloak_url}/realms/{self.keycloak_realm}"
+
+    @property
+    def keycloak_jwks_url(self) -> str:
+        return f"{self.keycloak_issuer_url}/protocol/openid-connect/certs"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

@@ -4,7 +4,7 @@
 # Usage: make <target>
 # Run `make help` to see all available commands.
 
-.PHONY: help setup dev dev-infra dev-back dev-front stop test test-back test-front lint lint-back lint-front db-migrate db-upgrade db-downgrade clean docker-up docker-down
+.PHONY: help setup dev dev-infra dev-back dev-front stop test test-back test-front lint lint-back lint-front db-migrate db-upgrade db-downgrade clean docker-up docker-down keycloak-logs
 
 # ── Python venv activation ────────────────────────────
 # All backend commands run through the virtualenv
@@ -38,11 +38,12 @@ setup: ## First-time project setup (installs everything)
 dev: ## Start full dev environment (infra + back + front)
 	@./scripts/dev.sh
 
-dev-infra: ## Start infrastructure only (PostgreSQL + Redis + Adminer)
+dev-infra: ## Start infrastructure only (PostgreSQL + Redis + Keycloak + Adminer)
 	docker compose -f docker-compose.dev.yml up -d
 	@echo ""
 	@echo "  ✓ PostgreSQL : localhost:5432"
 	@echo "  ✓ Redis      : localhost:6379"
+	@echo "  ✓ Keycloak   : http://localhost:8180 (admin/admin)"
 	@echo "  ✓ Adminer    : http://localhost:8080"
 	@echo ""
 
@@ -126,6 +127,9 @@ docker-down: ## Stop all Docker services
 
 docker-logs: ## Tail logs for all Docker services
 	docker compose logs -f
+
+keycloak-logs: ## Tail Keycloak logs (dev)
+	docker compose -f docker-compose.dev.yml logs -f keycloak
 
 # ═══════════════════════════════════════════════════════
 # CLEANUP

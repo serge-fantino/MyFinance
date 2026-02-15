@@ -1,7 +1,11 @@
 /**
- * Axios instance configured with auth interceptors.
+ * Axios instance configured with Keycloak auth interceptors.
+ *
+ * The access token is fetched from the Keycloak adapter (not localStorage).
+ * On 401, we attempt to refresh the token via Keycloak before retrying.
  */
 import axios, { AxiosHeaders } from "axios";
+import keycloak from "../lib/keycloak";
 
 const api = axios.create({
   baseURL: "/api/v1",
@@ -10,30 +14,27 @@ const api = axios.create({
   },
 });
 
-// Ensure Authorization is set as early as possible (page refresh, HMR, etc.)
-try {
-  const bootToken = localStorage.getItem("access_token");
-  if (bootToken) {
-    api.defaults.headers.common.Authorization = `Bearer ${bootToken}`;
-  }
-} catch {
-  // localStorage may be unavailable in some environments; ignore.
-}
-
-// Request interceptor: attach JWT token
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("access_token");
-  if (token) {
-    // Axios v1 may use AxiosHeaders internally; set in a compatible way.
-    if (!config.headers) {
-      config.headers = new AxiosHeaders();
+// Request interceptor: attach Keycloak access token
+api.interceptors.request.use(async (config) => {
+  if (keycloak.authenticated) {
+    // Refresh the token if it expires within 30 seconds
+    try {
+      await keycloak.updateToken(30);
+    } catch {
+      // Token refresh failed — Keycloak will handle re-login
     }
-    if (config.headers instanceof AxiosHeaders) {
-      config.headers.set("Authorization", `Bearer ${token}`);
-    } else {
-      // Fallback for plain object headers
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (config.headers as any).Authorization = `Bearer ${token}`;
+
+    const token = keycloak.token;
+    if (token) {
+      if (!config.headers) {
+        config.headers = new AxiosHeaders();
+      }
+      if (config.headers instanceof AxiosHeaders) {
+        config.headers.set("Authorization", `Bearer ${token}`);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (config.headers as any).Authorization = `Bearer ${token}`;
+      }
     }
   }
   return config;
@@ -50,27 +51,16 @@ api.interceptors.response.use(
       originalRequest._retry = true;
 
       try {
-        const refreshToken = localStorage.getItem("refresh_token");
-        if (!refreshToken) throw new Error("No refresh token");
-
-        const { data } = await axios.post("/api/v1/auth/refresh", null, {
-          params: { refresh_token: refreshToken },
-        });
-
-        localStorage.setItem("access_token", data.access_token);
-        localStorage.setItem("refresh_token", data.refresh_token);
-
-        // Update defaults for next requests
-        api.defaults.headers.common.Authorization = `Bearer ${data.access_token}`;
-
-        // Ensure the retried request has the header too
-        if (!originalRequest.headers) originalRequest.headers = {};
-        originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
-        return api(originalRequest);
+        // Try to refresh the token via Keycloak
+        const refreshed = await keycloak.updateToken(-1); // Force refresh
+        if (refreshed && keycloak.token) {
+          if (!originalRequest.headers) originalRequest.headers = {};
+          originalRequest.headers.Authorization = `Bearer ${keycloak.token}`;
+          return api(originalRequest);
+        }
       } catch {
-        localStorage.removeItem("access_token");
-        localStorage.removeItem("refresh_token");
-        window.location.href = "/login";
+        // Refresh failed — redirect to Keycloak login
+        keycloak.login();
         return Promise.reject(error);
       }
     }

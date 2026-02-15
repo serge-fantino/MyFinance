@@ -1,50 +1,58 @@
 /**
- * AuthProvider — restores the user session on app startup.
+ * AuthProvider — initializes Keycloak and restores the user session.
  *
  * Must wrap the entire app ABOVE the router so that AuthGuard/GuestGuard
- * can read isLoading/isAuthenticated from the store without deadlocking.
+ * can read isLoading/isAuthenticated from the store.
  *
- * The problem it solves: Guards check isLoading from the store, but the
- * logic that sets isLoading=false was inside useAuth() which only runs
- * when a page component mounts — but Guards block page mounting while
- * isLoading is true. Classic chicken-and-egg.
+ * Flow:
+ * 1. Initialize keycloak-js with check-sso (silent check)
+ * 2. If authenticated: fetch local user profile from backend → setUser
+ * 3. If not authenticated: setUser(null) → isLoading becomes false
  */
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useAuthStore } from "../../store/auth.store";
 import { authService } from "../../services/auth.service";
-import api from "../../services/api";
+import keycloak from "../../lib/keycloak";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const { setUser, isLoading } = useAuthStore();
+  const initialized = useRef(false);
 
   useEffect(() => {
-    const restoreSession = async () => {
-      if (!authService.hasToken()) {
-        setUser(null); // sets isLoading: false
-        return;
-      }
+    if (initialized.current) return;
+    initialized.current = true;
 
-      // Set default Authorization header immediately (covers any request that happens
-      // before interceptors run / during initial rendering).
-      const token = localStorage.getItem("access_token");
-      if (token) {
-        api.defaults.headers.common.Authorization = `Bearer ${token}`;
-      }
-
+    const initKeycloak = async () => {
       try {
-        const profile = await authService.getProfile();
-        setUser(profile); // sets isLoading: false
-      } catch {
-        // Token invalid/expired, refresh interceptor already tried
-        authService.logout();
-        setUser(null); // sets isLoading: false
+        const authenticated = await keycloak.init({
+          onLoad: "check-sso",
+          pkceMethod: "S256",
+          silentCheckSsoRedirectUri:
+            window.location.origin + "/silent-check-sso.html",
+        });
+
+        if (authenticated) {
+          // Fetch (or auto-provision) the local user from backend
+          try {
+            const profile = await authService.getProfile();
+            setUser(profile);
+          } catch {
+            // Backend unreachable or user provisioning failed
+            setUser(null);
+          }
+        } else {
+          setUser(null);
+        }
+      } catch (err) {
+        console.error("Keycloak init failed", err);
+        setUser(null);
       }
     };
 
-    restoreSession();
+    initKeycloak();
   }, [setUser]);
 
-  // Show a full-screen loader while checking auth
+  // Show a full-screen loader while Keycloak initializes
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
