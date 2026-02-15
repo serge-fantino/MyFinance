@@ -3,6 +3,7 @@
 from app.models.account import Account
 from app.models.base import Base
 from app.models.category import Category
+from app.models.classification_proposal import ClassificationProposal, ClassificationProposalCluster
 from app.models.conversation import Conversation, Message
 from app.models.transaction import ImportLog, Transaction
 from app.models.user import User
@@ -13,6 +14,8 @@ __all__ = [
     "Account",
     "Transaction",
     "Category",
+    "ClassificationProposal",
+    "ClassificationProposalCluster",
     "Conversation",
     "Message",
     "ImportLog",

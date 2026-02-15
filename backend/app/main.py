@@ -71,13 +71,14 @@ async def readiness_check():
 
 
 # ── API Routes ────────────────────────────────────
-from app.api.v1 import accounts, analytics, auth, categories, classification_rules, transactions, users  # noqa: E402
+from app.api.v1 import accounts, analytics, auth, categories, classification, classification_rules, transactions, users  # noqa: E402
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
 app.include_router(accounts.router, prefix="/api/v1/accounts", tags=["accounts"])
 app.include_router(transactions.router, prefix="/api/v1/transactions", tags=["transactions"])
 app.include_router(categories.router, prefix="/api/v1/categories", tags=["categories"])
+app.include_router(classification.router, prefix="/api/v1/classification", tags=["classification"])
 app.include_router(classification_rules.router, prefix="/api/v1/classification-rules", tags=["classification-rules"])
 app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
 

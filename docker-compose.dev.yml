@@ -45,16 +45,6 @@ services:
     environment:
       ADMINER_DEFAULT_SERVER: db
 
-  # ── Ollama (local LLM for classification) ─────────
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_dev:/root/.ollama
-
 volumes:
   pgdata_dev:
   redisdata_dev:
-  ollama_dev:

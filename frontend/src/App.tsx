@@ -7,6 +7,7 @@ import RegisterPage from "./pages/auth/RegisterPage";
 import DashboardPage from "./pages/dashboard/DashboardPage";
 import AccountsPage from "./pages/accounts/AccountsPage";
 import TransactionsPage from "./pages/transactions/TransactionsPage";
+import ClassificationPage from "./pages/classification/ClassificationPage";
 import SettingsPage from "./pages/settings/SettingsPage";
 import AnalyticsPage from "./pages/analytics/AnalyticsPage";
 
@@ -43,6 +44,7 @@ function App() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/accounts" element={<AccountsPage />} />
           <Route path="/transactions" element={<TransactionsPage />} />
+          <Route path="/classification" element={<ClassificationPage />} />
 
           {/* Placeholder pages */}
           <Route path="/analytics" element={<AnalyticsPage />} />

@@ -43,8 +43,9 @@ class Settings(BaseSettings):
     embedding_boost_keywords: str = ""
     embedding_boost_repeat: int = 2
 
-    # Local LLM via Ollama (for cluster classification)
-    llm_enabled: bool = True
+    # Local LLM via Ollama
+    llm_enabled: bool = False  # True = appel auto au LLM pour les clusters sans k-NN
+    llm_ui_enabled: bool = False  # True = afficher le bouton « Interpréter (LLM) » dans l’UX ; False = masquer (app fonctionne sans Ollama)
     llm_base_url: str = "http://localhost:11434"
     llm_model: str = "mistral"
     llm_timeout: float = 60.0  # seconds per request
@@ -59,7 +60,11 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",")]
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",  # ignore POSTGRES_* etc. (used by Docker, not by the app)
+    }
 
 
 settings = Settings()

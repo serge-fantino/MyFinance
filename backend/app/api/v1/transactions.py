@@ -11,12 +11,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_db
 from app.models.transaction import Transaction
 from app.models.user import User
+from app.config import settings
 from app.schemas.transaction import (
     ClusterClassifyRequest,
     ClusterClassifyResult,
     ClustersResponse,
     ComputeEmbeddingsResult,
     ImportResult,
+    InterpretClusterRequest,
+    InterpretClusterResult,
+    InterpretClusterSuggestion,
+    LlmStatusResponse,
     PaginatedResponse,
     ParseLabelsResult,
     TransactionCreate,
@@ -206,6 +211,77 @@ async def classify_cluster(
         create_rule=data.create_rule,
         rule_pattern=data.rule_pattern,
     )
+
+
+@router.get("/clusters/llm-status", response_model=LlmStatusResponse)
+async def get_llm_status(
+    current_user: User = Depends(get_current_user),
+):
+    """Return whether the LLM (Ollama) UI is enabled. When false, frontend hides the « Interpréter (LLM) » button."""
+    return LlmStatusResponse(ui_enabled=settings.llm_ui_enabled)
+
+
+@router.post("/clusters/interpret", response_model=InterpretClusterResult)
+async def interpret_cluster(
+    data: InterpretClusterRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Invoke the local LLM to interpret a cluster and suggest a category.
+
+    Returns the raw LLM response (for debugging) and the parsed suggestion.
+    Use this from the suggestions modal to see what the LLM returns per cluster.
+    """
+    from app.services.llm_service import LLMService
+
+    embedding_service = EmbeddingService(db)
+    enriched_cats = await embedding_service._get_enriched_categories(current_user)
+
+    transactions_with_id = [
+        {"id": t.id, "label_raw": t.label_raw, "amount": t.amount, "date": t.date}
+        for t in data.transactions
+    ]
+
+    llm_service = LLMService()
+    available = await llm_service.is_available()
+    if not available:
+        from app.config import settings
+        hint = (
+            "make dev-infra (démarrer l'infra dont Ollama), puis make ollama-pull (télécharger le modèle). "
+            f"Vérifier LLM_BASE_URL (actuel : {settings.llm_base_url}), LLM_MODEL (actuel : {settings.llm_model})."
+        )
+        return InterpretClusterResult(
+            llm_available=False,
+            error=f"Ollama non disponible. {hint}",
+        )
+
+    try:
+        raw_response, suggestion = await llm_service.suggest_category_with_subselection(
+            representative_label=data.representative_label,
+            transactions=transactions_with_id,
+            categories=enriched_cats,
+        )
+        parsed = None
+        if suggestion:
+            parsed = InterpretClusterSuggestion(
+                category_id=suggestion["category_id"],
+                category_name=suggestion["category_name"],
+                confidence=suggestion.get("confidence", "medium"),
+                explanation=suggestion.get("explanation", ""),
+                suggested_include_ids=suggestion.get("suggested_include_ids"),
+            )
+        return InterpretClusterResult(
+            llm_available=True,
+            raw_response=raw_response,
+            suggestion=parsed,
+        )
+    except Exception as e:
+        logger.exception("interpret_cluster_failed")
+        return InterpretClusterResult(
+            llm_available=True,
+            raw_response=None,
+            error=str(e),
+        )
 
 
 # ── Single transaction CRUD ─────────────────────────────

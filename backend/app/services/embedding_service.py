@@ -616,6 +616,151 @@ class EmbeddingService:
             "total_uncategorized": total_uncategorized,
         }
 
+    async def cluster_transaction_subset(
+        self,
+        user: User,
+        transaction_ids: list[int],
+        distance_threshold: float,
+        min_cluster_size: int = 1,
+    ) -> list[dict]:
+        """Recluster a subset of transactions with a stricter threshold.
+
+        Used when a cluster seems heterogeneous — split it into smaller, more
+        homogeneous sub-clusters. Uses min_cluster_size=1 by default to allow
+        single-transaction clusters.
+
+        Returns list of cluster dicts (same format as get_clusters).
+        """
+        if not transaction_ids:
+            return []
+
+        user_accounts = select(Account.id).where(Account.user_id == user.id)
+        result = await self.db.execute(
+            select(Transaction).where(
+                Transaction.id.in_(transaction_ids),
+                Transaction.account_id.in_(user_accounts),
+                Transaction.deleted_at.is_(None),
+                Transaction.category_id.is_(None),
+                Transaction.embedding.is_not(None),
+            )
+        )
+        transactions = list(result.scalars().all())
+        if len(transactions) < 2:
+            return []
+
+        embeddings = np.asarray(
+            [np.asarray(t.embedding, dtype=np.float64).ravel() for t in transactions],
+            dtype=np.float64,
+        )
+        sim_matrix = cosine_similarity(embeddings)
+        distance_matrix = np.clip(1.0 - sim_matrix, 0.0, 2.0)
+        np.fill_diagonal(distance_matrix, 0.0)
+        distance_matrix = np.ascontiguousarray(distance_matrix.astype(np.float64))
+
+        clusterer = AgglomerativeClustering(
+            n_clusters=None,
+            distance_threshold=float(distance_threshold),
+            metric="precomputed",
+            linkage="average",
+        )
+        labels = clusterer.fit_predict(distance_matrix)
+
+        min_size = int(min_cluster_size)
+        unique, counts = np.unique(labels, return_counts=True)
+        small_labels = {u for u, c in zip(unique, counts) if c < min_size}
+        labels = np.array([-1 if l in small_labels else l for l in labels])
+
+        cluster_map: dict[int, list[int]] = {}
+        for idx, label in enumerate(labels):
+            if label != -1:
+                cluster_map.setdefault(label, []).append(idx)
+
+        account_id = transactions[0].account_id if transactions else None
+        classified = await self._get_classified_transactions_with_embeddings(user, account_id)
+        enriched_cats = await self._get_enriched_categories(user)
+
+        llm_available = False
+        llm_service = None
+        if settings.llm_enabled:
+            from app.services.llm_service import LLMService
+            llm_service = LLMService()
+            llm_available = await llm_service.is_available()
+
+        clusters = []
+        clusters_needing_llm = []
+
+        for cluster_id, indices in sorted(
+            cluster_map.items(),
+            key=lambda x: (-sum(abs(float(transactions[i].amount)) for i in x[1]), -len(x[1])),
+        ):
+            cluster_txns = [transactions[i] for i in indices]
+            total_amount_abs = sum(abs(float(t.amount)) for t in cluster_txns)
+            cluster_embs = embeddings[indices]
+            centroid = cluster_embs.mean(axis=0).reshape(1, -1)
+
+            label_counts: dict[str, int] = {}
+            for txn in cluster_txns:
+                counterparty = (
+                    txn.parsed_metadata.get("counterparty")
+                    if txn.parsed_metadata
+                    else None
+                )
+                display_label = counterparty or txn.label_raw
+                label_counts[display_label] = label_counts.get(display_label, 0) + 1
+            representative_label = max(label_counts, key=label_counts.get)
+
+            all_txns = [
+                {"id": t.id, "label_raw": t.label_raw, "amount": float(t.amount), "date": t.date.isoformat()}
+                for t in cluster_txns
+            ]
+
+            suggestion = None
+            if classified:
+                suggestion = await self._suggest_from_neighbors(centroid, classified)
+
+            cluster_data = {
+                "transaction_count": len(cluster_txns),
+                "total_amount_abs": total_amount_abs,
+                "transaction_ids": [t.id for t in cluster_txns],
+                "sample_transactions": all_txns[:5],
+                "transactions": all_txns,
+                "representative_label": representative_label,
+                "suggested_category_id": None,
+                "suggested_category_name": None,
+                "suggestion_confidence": None,
+                "suggestion_source": None,
+                "suggestion_explanation": None,
+            }
+            if suggestion:
+                cluster_data.update({
+                    "suggested_category_id": suggestion["category_id"],
+                    "suggested_category_name": suggestion["category_name"],
+                    "suggestion_confidence": suggestion["confidence"],
+                    "suggestion_source": suggestion["source"],
+                    "suggestion_explanation": suggestion.get("explanation"),
+                })
+            else:
+                clusters_needing_llm.append(cluster_data)
+            clusters.append(cluster_data)
+
+        if clusters_needing_llm and llm_available and llm_service:
+            for cluster_data in clusters_needing_llm:
+                suggestion = await llm_service.suggest_category(
+                    representative_label=cluster_data["representative_label"],
+                    sample_transactions=cluster_data["sample_transactions"],
+                    categories=enriched_cats,
+                )
+                if suggestion:
+                    cluster_data.update({
+                        "suggested_category_id": suggestion["category_id"],
+                        "suggested_category_name": suggestion["category_name"],
+                        "suggestion_confidence": suggestion["confidence"],
+                        "suggestion_source": suggestion["source"],
+                        "suggestion_explanation": suggestion.get("explanation"),
+                    })
+
+        return clusters
+
     # ── Batch classification ────────────────────────────
 
     async def classify_transactions(

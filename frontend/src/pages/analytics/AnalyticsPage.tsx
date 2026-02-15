@@ -48,6 +48,8 @@ export default function AnalyticsPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"bar" | "treemap">("bar");
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
 
   const [filters, setFilters] = useState<FilterState>({
     accountId: "",
@@ -100,6 +102,32 @@ export default function AnalyticsPage() {
   const grandTotal = useMemo(
     () => data.reduce((s, d) => s + Math.abs(d.total), 0),
     [data]
+  );
+
+  const treeRoots = useMemo(
+    () => buildAnalyticsTree(categories, data, grandTotal),
+    [categories, data, grandTotal]
+  );
+
+  // ── Chart click: select category, expand tree, scroll to row ──
+  const handleChartCategorySelect = useCallback(
+    (categoryId: number | null) => {
+      setSelectedCategoryId(categoryId);
+      const key = categoryId === null ? "uncat" : String(categoryId);
+      const path = findPathToNode(treeRoots, categoryId);
+      setExpandedIds((prev) => {
+        const next = new Set(prev);
+        next.add("total");
+        path.forEach((id) => next.add(id === null ? "uncat" : String(id)));
+        return next;
+      });
+      // Scroll to the detail table after a short delay (let React render)
+      setTimeout(() => {
+        const row = document.querySelector(`[data-category-row="${key}"]`);
+        row?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
+    },
+    [treeRoots]
   );
 
   // ── KPIs ───────────────────────────────────────────
@@ -180,8 +208,16 @@ export default function AnalyticsPage() {
         </div>
       ) : (
         <>
-          {view === "bar" && <HorizontalBarChart data={data} />}
-          {view === "treemap" && <CategoryTreemap data={data} grandTotal={grandTotal} />}
+          {view === "bar" && (
+            <HorizontalBarChart data={data} onCategorySelect={handleChartCategorySelect} />
+          )}
+          {view === "treemap" && (
+            <CategoryTreemap
+              data={data}
+              grandTotal={grandTotal}
+              onCategorySelect={handleChartCategorySelect}
+            />
+          )}
 
           {/* Detail table */}
           <DetailTable
@@ -189,6 +225,9 @@ export default function AnalyticsPage() {
             grandTotal={grandTotal}
             filters={filters}
             categories={categories}
+            expandedIds={expandedIds}
+            onExpandedIdsChange={setExpandedIds}
+            selectedCategoryId={selectedCategoryId}
             onRefresh={fetchData}
             onCategoryDropdownOpen={fetchCategories}
             onEditModalOpen={fetchCategories}
@@ -227,7 +266,13 @@ function KpiCard({
 // Horizontal Bar Chart
 // ===========================================================================
 
-function HorizontalBarChart({ data }: { data: CategoryBreakdown[] }) {
+function HorizontalBarChart({
+  data,
+  onCategorySelect,
+}: {
+  data: CategoryBreakdown[];
+  onCategorySelect?: (categoryId: number | null) => void;
+}) {
   const chartData = useMemo(
     () =>
       data.map((d, i) => ({
@@ -239,6 +284,7 @@ function HorizontalBarChart({ data }: { data: CategoryBreakdown[] }) {
         count: d.count,
         percentage: d.percentage,
         fill: pickColor(i),
+        category_id: d.category_id,
       })),
     [data]
   );
@@ -246,14 +292,30 @@ function HorizontalBarChart({ data }: { data: CategoryBreakdown[] }) {
   const barHeight = 36;
   const chartHeight = Math.max(300, chartData.length * barHeight + 60);
 
+  const handleChartClick = useCallback(
+    (state: { activePayload?: { payload?: { category_id?: number | null } }[] }) => {
+      const payload = state?.activePayload?.[0]?.payload;
+      if (payload && onCategorySelect) {
+        onCategorySelect(payload.category_id ?? null);
+      }
+    },
+    [onCategorySelect]
+  );
+
   return (
     <div className="bg-card border rounded-xl p-4">
-      <h3 className="text-sm font-semibold mb-4">Classement par montant</h3>
+      <h3 className="text-sm font-semibold mb-4">
+        Classement par montant
+        {onCategorySelect && (
+          <span className="text-xs font-normal text-muted-foreground ml-2">(cliquez pour voir les transactions)</span>
+        )}
+      </h3>
       <ResponsiveContainer width="100%" height={chartHeight}>
         <BarChart
           data={chartData}
           layout="vertical"
           margin={{ top: 4, right: 60, bottom: 4, left: 10 }}
+          onClick={onCategorySelect ? handleChartClick : undefined}
         >
           <XAxis
             type="number"
@@ -278,7 +340,7 @@ function HorizontalBarChart({ data }: { data: CategoryBreakdown[] }) {
               fontSize: "12px",
             }}
           />
-          <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={24}>
+          <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={24} cursor={onCategorySelect ? "pointer" : undefined}>
             {chartData.map((entry, idx) => (
               <Cell key={idx} fill={entry.fill} />
             ))}
@@ -353,17 +415,17 @@ function CustomTreemapContent(props: TreemapContentProps) {
 
 function CategoryTreemap({
   data,
-  grandTotal,
+  onCategorySelect,
 }: {
   data: CategoryBreakdown[];
   grandTotal: number;
+  onCategorySelect?: (categoryId: number | null) => void;
 }) {
   // Group by parent (top-level categories)
   const treemapData = useMemo(() => {
-    // Build parent groups
     const groups = new Map<
       string,
-      { name: string; children: { name: string; value: number; fill: string; percentage: number }[] }
+      { name: string; children: { name: string; value: number; fill: string; percentage: number; category_id: number | null }[] }
     >();
 
     data.forEach((d, idx) => {
@@ -378,6 +440,7 @@ function CategoryTreemap({
         value: Math.abs(d.total),
         fill: pickColor(idx),
         percentage: d.percentage,
+        category_id: d.category_id,
       });
     });
 
@@ -386,7 +449,7 @@ function CategoryTreemap({
 
   // Flatten for Recharts Treemap (it wants a flat children array at top level)
   const flatData = useMemo(() => {
-    const items: { name: string; value: number; fill: string; percentage: number }[] = [];
+    const items: { name: string; value: number; fill: string; percentage: number; category_id: number | null }[] = [];
     for (const group of treemapData) {
       for (const child of group.children) {
         items.push(child);
@@ -395,9 +458,23 @@ function CategoryTreemap({
     return items;
   }, [treemapData]);
 
+  const handleNodeClick = useCallback(
+    (node: unknown) => {
+      if (onCategorySelect && node != null && typeof node === "object" && "category_id" in node) {
+        onCategorySelect((node as { category_id?: number | null }).category_id ?? null);
+      }
+    },
+    [onCategorySelect]
+  );
+
   return (
-    <div className="bg-card border rounded-xl p-4">
-      <h3 className="text-sm font-semibold mb-4">Répartition visuelle (treemap)</h3>
+    <div className={`bg-card border rounded-xl p-4 ${onCategorySelect ? "cursor-pointer" : ""}`}>
+      <h3 className="text-sm font-semibold mb-4">
+        Répartition visuelle (treemap)
+        {onCategorySelect && (
+          <span className="text-xs font-normal text-muted-foreground ml-2">(cliquez pour voir les transactions)</span>
+        )}
+      </h3>
       <ResponsiveContainer width="100%" height={420}>
         <Treemap
           data={flatData}
@@ -405,6 +482,7 @@ function CategoryTreemap({
           aspectRatio={4 / 3}
           stroke="hsl(var(--background))"
           content={<CustomTreemapContent x={0} y={0} width={0} height={0} name="" value={0} fill="" percentage={0} />}
+          onClick={onCategorySelect ? handleNodeClick : undefined}
         />
       </ResponsiveContainer>
     </div>
@@ -423,6 +501,23 @@ export interface AnalyticsTreeNode {
   percentage: number;
   children: AnalyticsTreeNode[];
   isUncategorized?: boolean;
+}
+
+function findPathToNode(
+  roots: AnalyticsTreeNode[],
+  targetId: number | null
+): (number | null)[] {
+  function search(nodes: AnalyticsTreeNode[], path: (number | null)[]): (number | null)[] | null {
+    for (const node of nodes) {
+      const newPath = [...path, node.id];
+      if (node.id === targetId) return newPath;
+      const found = search(node.children, newPath);
+      if (found) return found;
+    }
+    return null;
+  }
+  const result = search(roots, []);
+  return result ?? [];
 }
 
 function buildAnalyticsTree(categories: Category[], breakdown: CategoryBreakdown[], grandTotal: number): AnalyticsTreeNode[] {
@@ -475,6 +570,9 @@ function DetailTable({
   grandTotal,
   filters,
   categories: rawCategories,
+  expandedIds,
+  onExpandedIdsChange,
+  selectedCategoryId,
   onRefresh,
   onCategoryDropdownOpen,
   onEditModalOpen,
@@ -483,11 +581,13 @@ function DetailTable({
   grandTotal: number;
   filters: FilterState;
   categories: Category[];
+  expandedIds: Set<string>;
+  onExpandedIdsChange: (ids: Set<string>) => void;
+  selectedCategoryId?: number | null;
   onRefresh: () => void;
   onCategoryDropdownOpen?: () => void;
   onEditModalOpen?: () => void;
 }) {
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [detailByCat, setDetailByCat] = useState<Record<string, LabelGroup[]>>({});
   const [detailLoadingCat, setDetailLoadingCat] = useState<number | null | "uncat">(null);
 
@@ -512,14 +612,19 @@ function DetailTable({
     return flat;
   }, [rawCategories]);
 
-  const toggleExpanded = useCallback((key: string) => {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
+  const toggleExpanded = useCallback(
+    (key: string) => {
+      onExpandedIdsChange(
+        (() => {
+          const next = new Set(expandedIds);
+          if (next.has(key)) next.delete(key);
+          else next.add(key);
+          return next;
+        })()
+      );
+    },
+    [expandedIds, onExpandedIdsChange]
+  );
 
   const loadDetail = useCallback(
     async (catId: number | null) => {
@@ -543,6 +648,17 @@ function DetailTable({
     [filters.accountId, filters.dateFrom, filters.dateTo, filters.direction, detailByCat]
   );
 
+  // Load detail when category is expanded from chart click
+  useEffect(() => {
+    expandedIds.forEach((key) => {
+      if (key === "total") return;
+      const catId = key === "uncat" ? null : parseInt(key, 10);
+      if (key === "uncat" || !Number.isNaN(catId)) {
+        loadDetail(catId);
+      }
+    });
+  }, [expandedIds, loadDetail]);
+
   const handleToggleCategory = useCallback(
     (node: AnalyticsTreeNode, key: string) => {
       toggleExpanded(key);
@@ -558,7 +674,7 @@ function DetailTable({
         category_id: newCatId ?? undefined,
       });
       onRefresh();
-      setDetailByCat((prev) => ({}));
+      setDetailByCat({});
     } catch {
       // ignore
     }
@@ -589,7 +705,7 @@ function DetailTable({
         rule_pattern: pattern,
       });
       onRefresh();
-      setDetailByCat((prev) => ({}));
+      setDetailByCat({});
     } catch {
       // ignore
     }
@@ -604,7 +720,7 @@ function DetailTable({
         create_rule: false,
       });
       onRefresh();
-      setDetailByCat((prev) => ({}));
+      setDetailByCat({});
     } catch {
       // ignore
     }
@@ -615,9 +731,15 @@ function DetailTable({
     id: number,
     payload: { label_clean?: string; category_id?: number | null; notes?: string | null },
   ) => {
-    await transactionService.update(id, { ...payload, create_rule: false });
+    const update: Parameters<typeof transactionService.update>[1] = {
+      label_clean: payload.label_clean,
+      notes: payload.notes ?? undefined,
+      create_rule: false,
+    };
+    if (payload.category_id != null) update.category_id = payload.category_id;
+    await transactionService.update(id, update);
     onRefresh();
-    setDetailByCat((prev) => ({}));
+    setDetailByCat({});
     setEditTransaction(null);
   };
 
@@ -668,6 +790,7 @@ function DetailTable({
                 depth={0}
                 colorIndex={idx}
                 expandedIds={expandedIds}
+                selectedCategoryId={selectedCategoryId}
                 toggleExpanded={handleToggleCategory}
                 detailByCat={detailByCat}
                 detailLoadingCat={detailLoadingCat}
@@ -710,6 +833,7 @@ function TreeCategoryRow({
   depth,
   colorIndex,
   expandedIds,
+  selectedCategoryId,
   toggleExpanded,
   detailByCat,
   detailLoadingCat,
@@ -723,6 +847,7 @@ function TreeCategoryRow({
   depth: number;
   colorIndex: number;
   expandedIds: Set<string>;
+  selectedCategoryId?: number | null;
   toggleExpanded: (node: AnalyticsTreeNode, key: string) => void;
   detailByCat: Record<string, LabelGroup[]>;
   detailLoadingCat: number | null | "uncat";
@@ -741,10 +866,13 @@ function TreeCategoryRow({
   const isLoadingDetail = hasTransactions && detail === undefined && detailLoadingCat === (node.id === null ? "uncat" : node.id);
   const indent = 12 + depth * 20;
 
+  const isSelected = selectedCategoryId !== undefined && node.id === selectedCategoryId;
+
   return (
     <>
       <tr
-        className={`border-b hover:bg-muted/20 transition-colors cursor-pointer ${isExpanded ? "bg-muted/30" : ""}`}
+        data-category-row={key}
+        className={`border-b hover:bg-muted/20 transition-colors cursor-pointer ${isExpanded ? "bg-muted/30" : ""} ${isSelected ? "ring-2 ring-primary ring-inset" : ""}`}
         onClick={() => toggleExpanded(node, key)}
       >
         <td className="p-3" style={{ paddingLeft: `${indent}px` }}>
@@ -788,6 +916,7 @@ function TreeCategoryRow({
             depth={depth + 1}
             colorIndex={colorIndex}
             expandedIds={expandedIds}
+            selectedCategoryId={selectedCategoryId}
             toggleExpanded={toggleExpanded}
             detailByCat={detailByCat}
             detailLoadingCat={detailLoadingCat}

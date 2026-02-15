@@ -10,6 +10,9 @@ import type {
   ClustersResponse,
   ComputeEmbeddingsResult,
   ImportResult,
+  InterpretClusterRequest,
+  InterpretClusterResult,
+  LlmStatusResponse,
   PaginatedTransactions,
   ParseLabelsResult,
   Transaction,
@@ -98,6 +101,16 @@ export const transactionService = {
 
   async classifyCluster(data: ClusterClassifyRequest): Promise<ClusterClassifyResult> {
     const response = await api.post("/transactions/clusters/classify", data);
+    return response.data;
+  },
+
+  async interpretCluster(data: InterpretClusterRequest): Promise<InterpretClusterResult> {
+    const response = await api.post("/transactions/clusters/interpret", data);
+    return response.data;
+  },
+
+  async getLlmStatus(): Promise<LlmStatusResponse> {
+    const response = await api.get("/transactions/clusters/llm-status");
     return response.data;
   },
 };

@@ -153,6 +153,31 @@ export interface ClusterClassifyResult {
   rule_created: boolean;
 }
 
+export interface InterpretClusterRequest {
+  representative_label: string;
+  transactions: ClusterSampleTransaction[];
+}
+
+export interface InterpretClusterSuggestion {
+  category_id: number;
+  category_name: string;
+  confidence: string;
+  explanation: string;
+  /** IDs of transactions to include (LLM sub-selection) */
+  suggested_include_ids?: number[] | null;
+}
+
+export interface InterpretClusterResult {
+  llm_available: boolean;
+  raw_response: string | null;
+  suggestion: InterpretClusterSuggestion | null;
+  error: string | null;
+}
+
+export interface LlmStatusResponse {
+  ui_enabled: boolean;
+}
+
 export interface ParseLabelsResult {
   parsed: number;
   total: number;

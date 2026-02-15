@@ -134,6 +134,35 @@ class ClusterClassifyResult(BaseModel):
     rule_created: bool
 
 
+class InterpretClusterRequest(BaseModel):
+    """Request to interpret a cluster with the LLM (for debugging / manual invoke)."""
+    representative_label: str
+    transactions: list[ClusterSampleTransaction]
+
+
+class InterpretClusterSuggestion(BaseModel):
+    """Parsed LLM suggestion for a cluster."""
+    category_id: int
+    category_name: str
+    confidence: str
+    explanation: str
+    # IDs of transactions to include (subset if LLM identifies outliers)
+    suggested_include_ids: list[int] | None = None
+
+
+class InterpretClusterResult(BaseModel):
+    """Result of LLM interpretation for a cluster."""
+    llm_available: bool
+    raw_response: str | None = None
+    suggestion: InterpretClusterSuggestion | None = None
+    error: str | None = None
+
+
+class LlmStatusResponse(BaseModel):
+    """Whether the LLM (Ollama) UI is enabled in the app."""
+    ui_enabled: bool
+
+
 class ParseLabelsResult(BaseModel):
     """Result of parsing labels for existing transactions."""
     parsed: int
