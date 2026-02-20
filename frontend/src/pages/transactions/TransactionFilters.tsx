@@ -19,6 +19,8 @@ interface TransactionFiltersProps {
   categories: Category[];
   /** Appelé à l’ouverture du menu catégorie pour rafraîchir la liste (ex. après modification dans la sidebar). */
   onCategoryDropdownOpen?: () => void;
+  /** Plage de dates des données (première à dernière transaction) — pour préremplir "Période" */
+  dateRange?: { minDate: string; maxDate: string } | null;
 }
 
 export function TransactionFilters({
@@ -27,6 +29,7 @@ export function TransactionFilters({
   accounts,
   categories,
   onCategoryDropdownOpen,
+  dateRange,
 }: TransactionFiltersProps) {
   // Flatten categories for select
   const flatCategories = useMemo(() => {
@@ -66,7 +69,12 @@ export function TransactionFilters({
       const to = endDate.toISOString().slice(0, 10);
       onChange({ datePreset: "month", dateFrom: from, dateTo: to });
     } else {
-      onChange({ datePreset: "range" });
+      // Période: préremplir avec première et dernière transaction
+      if (dateRange) {
+        onChange({ datePreset: "range", dateFrom: dateRange.minDate, dateTo: dateRange.maxDate });
+      } else {
+        onChange({ datePreset: "range" });
+      }
     }
   };
 

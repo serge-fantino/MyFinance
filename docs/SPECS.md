@@ -162,7 +162,7 @@ Les fichiers OFX/QFX/XML sont parsés sans configuration : les champs `date`, `a
 2. Détection automatique du format par extension (`.csv`, `.xlsx`, `.ofx`, `.qfx`, `.xml`)
 3. Prévisualisation des premières lignes (CSV/Excel) ou import direct (OFX/XML)
 4. Mapping des colonnes (si CSV/Excel) ou validation (si OFX/QIF)
-5. Détection des doublons (basée sur `fitid` si disponible, sinon hash : date + montant + libellé)
+5. Détection des doublons : 1) hash exact = date+montant+libellé+index (index = ordre parmi les transactions identiques dans le lot, en général 1) ; 2) fuzzy : montant+libellé dans ±7 jours. L'index évite les collisions (ex: 2 tickets métro identiques → #1 et #2).
 6. Import avec rapport : X importées, Y doublons ignorés, Z erreurs
 7. Lancement de la classification IA en arrière-plan
 

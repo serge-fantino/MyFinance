@@ -7,8 +7,14 @@ interface TransactionKPIsProps {
   filteredIncome: number;
   /** Sum of negative amounts (absolute) matching the current filters */
   filteredExpenses: number;
-  /** Net = income - expenses */
+  /** Net = income - expenses (différence sur la période) */
   filteredNet: number;
+  /** Balance at balanceDate */
+  balanceAtDate?: number | null;
+  /** Date used for balance (dateTo or today) */
+  balanceDate: string;
+  /** True when a date filter is applied */
+  hasDateFilter: boolean;
 }
 
 export function TransactionKPIs({
@@ -16,7 +22,18 @@ export function TransactionKPIs({
   filteredIncome,
   filteredExpenses,
   filteredNet,
+  balanceAtDate,
+  balanceDate,
+  hasDateFilter,
 }: TransactionKPIsProps) {
+  const balanceLabel = hasDateFilter
+    ? `Solde au ${new Date(balanceDate + "T00:00:00").toLocaleDateString("fr-FR", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      })}`
+    : "Solde actuel";
+
   const kpis = [
     {
       label: "Transactions",
@@ -37,17 +54,36 @@ export function TransactionKPIs({
       bg: "bg-red-50 dark:bg-red-950/30",
     },
     {
-      label: "Solde net",
+      label: "Différence sur la période",
       value: `${filteredNet >= 0 ? "+" : ""}${formatCurrency(filteredNet)}`,
       color: filteredNet >= 0 ? "text-emerald-600" : "text-red-600",
       bg: filteredNet >= 0
         ? "bg-emerald-50 dark:bg-emerald-950/30"
         : "bg-red-50 dark:bg-red-950/30",
     },
+    {
+      label: balanceLabel,
+      value:
+        balanceAtDate != null
+          ? `${balanceAtDate >= 0 ? "+" : ""}${formatCurrency(balanceAtDate)}`
+          : "—",
+      color:
+        balanceAtDate != null
+          ? balanceAtDate >= 0
+            ? "text-emerald-600"
+            : "text-red-600"
+          : "text-muted-foreground",
+      bg:
+        balanceAtDate != null
+          ? balanceAtDate >= 0
+            ? "bg-emerald-50 dark:bg-emerald-950/30"
+            : "bg-red-50 dark:bg-red-950/30"
+          : "bg-muted/50",
+    },
   ];
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
       {kpis.map((kpi) => (
         <div
           key={kpi.label}
