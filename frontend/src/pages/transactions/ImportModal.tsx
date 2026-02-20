@@ -1,18 +1,26 @@
 import { useRef, useState } from "react";
 import { Button } from "../../components/ui/Button";
 import { Alert } from "../../components/ui/Alert";
+import { Input } from "../../components/ui/Input";
 import { transactionService } from "../../services/transaction.service";
 import type { Account } from "../../types/account.types";
-import type { ImportResult } from "../../types/transaction.types";
+import type { ImportPreviewResult, ImportResult } from "../../types/transaction.types";
 
 interface ImportModalProps {
   accounts: Account[];
   onClose: (refreshNeeded: boolean) => void;
 }
 
+type ImportStep = "form" | "confirm" | "result";
+
 export function ImportModal({ accounts, onClose }: ImportModalProps) {
   const [accountId, setAccountId] = useState<string>(accounts[0]?.id.toString() || "");
   const [file, setFile] = useState<File | null>(null);
+  const [step, setStep] = useState<ImportStep>("form");
+  const [preview, setPreview] = useState<ImportPreviewResult | null>(null);
+  const [accountAction, setAccountAction] = useState<"use" | "update" | "create">("use");
+  const [newAccountName, setNewAccountName] = useState("");
+  const [applyBalanceReference, setApplyBalanceReference] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
@@ -28,28 +36,75 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
       }
       setError(null);
       setFile(f);
+      setStep("form");
+      setPreview(null);
     }
   };
 
-  const handleImport = async () => {
+  const handleNextOrImport = async () => {
     if (!file || !accountId) return;
     setError(null);
     setIsUploading(true);
     try {
-      const importResult = await transactionService.import(parseInt(accountId), file);
-      setResult(importResult);
+      const previewResult = await transactionService.importPreview(file);
+      setPreview(previewResult);
+
+      if ((previewResult.file_account_info || previewResult.file_balance_info) && accounts.length > 0) {
+        setStep("confirm");
+      } else {
+        await doImport(parseInt(accountId), "use", undefined);
+      }
     } catch {
-      setError("Erreur lors de l'import. Verifiez le format du fichier.");
+      setError("Erreur lors de la lecture du fichier.");
     } finally {
       setIsUploading(false);
     }
   };
 
+  const doImport = async (
+    targetAccountId: number,
+    action: "use" | "update" | "create",
+    name?: string,
+    useBalanceRef?: boolean
+  ) => {
+    if (!file) return;
+    setError(null);
+    setIsUploading(true);
+    try {
+      const importResult = await transactionService.import(
+        targetAccountId,
+        file,
+        action,
+        name,
+        useBalanceRef
+      );
+      setResult(importResult);
+      setStep("result");
+    } catch {
+      setError("Erreur lors de l'import. Vérifiez le format du fichier.");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleConfirmImport = () => {
+    const useBalanceRef = applyBalanceReference && !!preview?.file_balance_info;
+    if (accountAction === "create" && newAccountName.trim()) {
+      doImport(parseInt(accountId), "create", newAccountName.trim(), useBalanceRef);
+    } else if (accountAction === "create") {
+      setError("Indiquez un nom pour le nouveau compte.");
+    } else {
+      doImport(parseInt(accountId), accountAction, undefined, useBalanceRef);
+    }
+  };
+
+  const fileAccountInfo = preview?.file_account_info;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={() => onClose(!!result)} />
 
-      <div className="relative bg-card rounded-xl shadow-xl border w-full max-w-lg mx-4">
+      <div className="relative bg-card rounded-xl shadow-xl border w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
         <div className="p-6">
           <h2 className="text-xl font-semibold mb-1">Importer des transactions</h2>
           <p className="text-sm text-muted-foreground mb-6">
@@ -58,7 +113,176 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
 
           {error && <Alert variant="destructive" className="mb-4">{error}</Alert>}
 
-          {result ? (
+          {step === "confirm" && (fileAccountInfo || preview?.file_balance_info) ? (
+            /* Confirmation OFX : compte et/ou solde détectés */
+            <div className="space-y-4">
+              {fileAccountInfo && accountAction !== "create" && (
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium">Compte cible</label>
+                  <select
+                    value={accountId}
+                    onChange={(e) => setAccountId(e.target.value)}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {!fileAccountInfo && (
+                <>
+                  <div className="space-y-1.5">
+                    <label className="block text-sm font-medium">Compte cible</label>
+                    <select
+                      value={accountId}
+                      onChange={(e) => setAccountId(e.target.value)}
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {accounts.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {preview?.total_rows} transaction{preview && preview.total_rows !== 1 ? "s" : ""} dans le fichier
+                  </p>
+                </>
+              )}
+              {fileAccountInfo && (
+              <div className="rounded-lg border bg-muted/30 p-4 text-sm">
+                <p className="font-medium mb-2">Compte détecté dans le fichier OFX :</p>
+                <dl className="space-y-1 text-muted-foreground">
+                  {fileAccountInfo.bank_id && (
+                    <div className="flex gap-2">
+                      <dt className="w-24">Banque :</dt>
+                      <dd>{fileAccountInfo.bank_id}</dd>
+                    </div>
+                  )}
+                  {fileAccountInfo.branch_id && (
+                    <div className="flex gap-2">
+                      <dt className="w-24">Guichet :</dt>
+                      <dd>{fileAccountInfo.branch_id}</dd>
+                    </div>
+                  )}
+                  {fileAccountInfo.acct_id && (
+                    <div className="flex gap-2">
+                      <dt className="w-24">Compte :</dt>
+                      <dd>{fileAccountInfo.acct_id}</dd>
+                    </div>
+                  )}
+                  {fileAccountInfo.acct_type && (
+                    <div className="flex gap-2">
+                      <dt className="w-24">Type :</dt>
+                      <dd>{fileAccountInfo.acct_type}</dd>
+                    </div>
+                  )}
+                  {fileAccountInfo.institution && (
+                    <div className="flex gap-2">
+                      <dt className="w-24">Établissement :</dt>
+                      <dd>{fileAccountInfo.institution}</dd>
+                    </div>
+                  )}
+                </dl>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {preview?.total_rows} transaction{preview && preview.total_rows !== 1 ? "s" : ""} dans le fichier
+                </p>
+              </div>
+              )}
+
+              {preview?.file_balance_info && (
+                <div className="rounded-lg border bg-muted/30 p-4 text-sm">
+                  <p className="font-medium mb-2">Solde dans le fichier :</p>
+                  <p className="text-muted-foreground">
+                    {preview.file_balance_info.amount.toLocaleString("fr-FR", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}{" "}
+                    € au {new Date(preview.file_balance_info.date).toLocaleDateString("fr-FR")}
+                  </p>
+                  <label className="mt-3 flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={applyBalanceReference}
+                      onChange={(e) => setApplyBalanceReference(e.target.checked)}
+                      className="rounded"
+                    />
+                    <span className="text-sm">
+                      Utiliser ce solde comme point de référence (calibration du compte)
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              {fileAccountInfo && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Choisir une action :</p>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer rounded border p-3 hover:bg-muted/30">
+                    <input
+                      type="radio"
+                      name="account_action"
+                      checked={accountAction === "use"}
+                      onChange={() => setAccountAction("use")}
+                      className="rounded-full"
+                    />
+                    <span>Importer dans le compte sélectionné</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer rounded border p-3 hover:bg-muted/30">
+                    <input
+                      type="radio"
+                      name="account_action"
+                      checked={accountAction === "update"}
+                      onChange={() => setAccountAction("update")}
+                      className="rounded-full"
+                    />
+                    <span>Importer et mettre à jour les infos du compte</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer rounded border p-3 hover:bg-muted/30">
+                    <input
+                      type="radio"
+                      name="account_action"
+                      checked={accountAction === "create"}
+                      onChange={() => setAccountAction("create")}
+                      className="rounded-full"
+                    />
+                    <span>Créer un nouveau compte</span>
+                  </label>
+                </div>
+                {accountAction === "create" && (
+                  <div className="mt-2">
+                    <label className="block text-sm font-medium mb-1">Nom du nouveau compte</label>
+                    <Input
+                      value={newAccountName}
+                      onChange={(e) => setNewAccountName(e.target.value)}
+                      placeholder="Ex: Compte courant BNP"
+                      className="mt-1"
+                    />
+                  </div>
+                )}
+              </div>
+              )}
+
+              <div className="flex gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => setStep("form")}
+                >
+                  Retour
+                </Button>
+                <Button
+                  className="flex-1"
+                  disabled={fileAccountInfo && accountAction === "create" && !newAccountName.trim()}
+                  isLoading={isUploading}
+                  onClick={handleConfirmImport}
+                >
+                  Confirmer et importer
+                </Button>
+              </div>
+            </div>
+          ) : result ? (
             /* Import result */
             <div className="space-y-4">
               <Alert variant="success">Import termine avec succes !</Alert>
@@ -161,9 +385,9 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                   className="flex-1"
                   disabled={!file || !accountId}
                   isLoading={isUploading}
-                  onClick={handleImport}
+                  onClick={handleNextOrImport}
                 >
-                  Importer
+                  {file?.name && /\.(ofx|qfx|xml)$/i.test(file.name) ? "Suivant" : "Importer"}
                 </Button>
               </div>
             </div>

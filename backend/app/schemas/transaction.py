@@ -67,6 +67,21 @@ class PaginatedResponse(BaseModel):
     meta: dict  # {total, page, per_page, pages}
 
 
+class FileBalanceInfo(BaseModel):
+    """Balance from OFX LEDGERBAL/AVAILBAL section."""
+    date: str  # ISO date
+    amount: Decimal
+    source: str  # ledger | avail
+
+
+class ImportPreviewResult(BaseModel):
+    """Preview of file before import (OFX account info, row count)."""
+    format: str  # csv, excel, ofx
+    total_rows: int
+    file_account_info: dict | None = None  # OFX: bank_id, branch_id, acct_id, acct_type, acct_key, institution
+    file_balance_info: FileBalanceInfo | None = None  # OFX: balance at date (for calibration)
+
+
 class ImportResult(BaseModel):
     total_rows: int
     imported_count: int

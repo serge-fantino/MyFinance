@@ -83,6 +83,104 @@ def _iter_accounts(ofx):
         yield ofx.account
 
 
+def extract_ofx_account_info(content: bytes) -> dict | None:
+    """Extract bank account info from OFX/QFX file (BANKACCTFROM section).
+
+    Returns None for non-OFX files or if parsing fails.
+    """
+    import re
+
+    ext = _detect_ofx_from_content(content)
+    if not ext:
+        return None
+
+    try:
+        content_str = content.decode("utf-8", errors="ignore")
+        ofx = OfxParser.parse(io.BytesIO(content))
+        acc = None
+        if hasattr(ofx, "accounts") and ofx.accounts:
+            acc = ofx.accounts[0]
+        elif hasattr(ofx, "account") and ofx.account:
+            acc = ofx.account
+        if not acc:
+            return None
+
+        info = {
+            "bank_id": (getattr(acc, "routing_number", None) or "").strip(),
+            "branch_id": (getattr(acc, "branch_id", None) or "").strip(),
+            "acct_id": (getattr(acc, "account_id", None) or "").strip(),
+            "acct_type": (getattr(acc, "account_type", None) or "").strip(),
+            "institution": (getattr(acc, "institution", None) or "").strip(),
+            "currency": (getattr(acc, "curdef", None) or "EUR").strip(),
+        }
+
+        # Fallback: parse raw XML if ofxparse didn't fill (BANKACCTFROM)
+        if not info["bank_id"]:
+            m = re.search(r"<bankid>([^<]+)</bankid>", content_str, re.I)
+            if m:
+                info["bank_id"] = m.group(1).strip()
+        if not info["branch_id"]:
+            m = re.search(r"<branchid>([^<]+)</branchid>", content_str, re.I)
+            if m:
+                info["branch_id"] = m.group(1).strip()
+        if not info["acct_id"]:
+            m = re.search(r"<acctid>([^<]+)</acctid>", content_str, re.I)
+            if m:
+                info["acct_id"] = m.group(1).strip()
+
+        m = re.search(r"<acctkey>([^<]+)</acctkey>", content_str, re.I)
+        if m:
+            info["acct_key"] = m.group(1).strip()
+
+        # Balance: LEDGERBAL (preferred) or AVAILBAL
+        bal_info = _extract_ofx_balance(content_str)
+        if bal_info:
+            info["balance_date"] = bal_info["date"]
+            info["balance_amount"] = bal_info["amount"]
+            info["balance_source"] = bal_info["source"]
+
+        return info
+    except Exception:
+        return None
+
+
+def _extract_ofx_balance(content_str: str) -> dict | None:
+    """Extract balance from LEDGERBAL or AVAILBAL section. Returns {date, amount, source}."""
+    import re
+
+    # Prefer LEDGERBAL (ledger balance), fallback to AVAILBAL (available balance)
+    for tag, source in (("ledgerbal", "ledger"), ("availbal", "avail")):
+        block = re.search(
+            rf"<{tag}>([\s\S]*?)</{tag}>",
+            content_str,
+            re.I,
+        )
+        if not block:
+            continue
+        inner = block.group(1)
+        amt_m = re.search(r"<balamt>([^<]+)</balamt>", inner, re.I)
+        dt_m = re.search(r"<dtasof>([^<]+)</dtasof>", inner, re.I)
+        if amt_m and dt_m:
+            try:
+                amt = Decimal(str(amt_m.group(1).strip()))
+                dt_str = dt_m.group(1).strip()
+                # OFX DTASOF: 20260219230000.000 (YYYYMMDDHHMMSS.mmm)
+                date_part = dt_str.split(".")[0][:8]
+                ref_date = datetime.strptime(date_part, "%Y%m%d").date()
+                return {"date": ref_date.isoformat(), "amount": amt, "source": source}
+            except (ValueError, InvalidOperation):
+                continue
+    return None
+
+
+def _detect_ofx_from_content(content: bytes) -> str | None:
+    """Detect if content looks like OFX/QFX."""
+    start = content[:500].decode("utf-8", errors="ignore").lower()
+    if "ofx" in start or "<ofx" in start or "envelope" in start:
+        return "ofx"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # CSV parser
 # ---------------------------------------------------------------------------

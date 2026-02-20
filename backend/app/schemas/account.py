@@ -11,6 +11,8 @@ class AccountCreate(BaseModel):
     type: str  # courant, epargne, carte, invest
     currency: str = "EUR"
     bank_name: str | None = None
+    bank_id: str | None = None  # OFX BANKID
+    branch_id: str | None = None  # OFX BRANCHID
     initial_balance: Decimal = Decimal("0.00")
     color: str | None = None
 
@@ -20,6 +22,8 @@ class AccountUpdate(BaseModel):
     type: str | None = None
     currency: str | None = None
     bank_name: str | None = None
+    bank_id: str | None = None
+    branch_id: str | None = None
     color: str | None = None
     status: str | None = None
 
@@ -36,6 +40,8 @@ class AccountResponse(BaseModel):
     type: str
     currency: str
     bank_name: str | None
+    bank_id: str | None = None
+    branch_id: str | None = None
     initial_balance: Decimal
     color: str | None
     status: str

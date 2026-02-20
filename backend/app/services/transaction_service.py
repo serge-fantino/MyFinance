@@ -139,6 +139,11 @@ class TransactionService:
         user: User,
         account_id: int | None = None,
         granularity: str = "monthly",
+        date_from: date | None = None,
+        date_to: date | None = None,
+        category_id: int | None = None,
+        amount_min: Decimal | None = None,
+        amount_max: Decimal | None = None,
     ) -> list[dict]:
         """Return cashflow aggregates.
 
@@ -153,17 +158,25 @@ class TransactionService:
         ]
         if account_id:
             base_filter.append(Transaction.account_id == account_id)
+        if date_from:
+            base_filter.append(Transaction.date >= date_from)
+        if date_to:
+            base_filter.append(Transaction.date <= date_to)
+        if category_id:
+            base_filter.append(Transaction.category_id == category_id)
+        if amount_min is not None:
+            base_filter.append(Transaction.amount >= amount_min)
+        if amount_max is not None:
+            base_filter.append(Transaction.amount <= amount_max)
 
         if granularity == "daily":
             # Determine initial_balance to start the cumulative from
             initial_balance = Decimal("0")
             if account_id:
-                # Single account: use its initial_balance
                 acct = await self.db.get(Account, account_id)
                 if acct:
                     initial_balance = acct.initial_balance
             else:
-                # All accounts: sum all initial_balances for this user
                 result = await self.db.execute(
                     select(func.coalesce(func.sum(Account.initial_balance), 0)).where(
                         Account.user_id == user.id,
@@ -171,6 +184,25 @@ class TransactionService:
                     )
                 )
                 initial_balance = result.scalar() or Decimal("0")
+            # When date_from: add sum of transactions before date_from to cumulative start
+            if date_from:
+                pre_filter = [
+                    Transaction.account_id.in_(user_accounts),
+                    Transaction.deleted_at.is_(None),
+                    Transaction.date < date_from,
+                ]
+                if account_id:
+                    pre_filter.append(Transaction.account_id == account_id)
+                if category_id:
+                    pre_filter.append(Transaction.category_id == category_id)
+                if amount_min is not None:
+                    pre_filter.append(Transaction.amount >= amount_min)
+                if amount_max is not None:
+                    pre_filter.append(Transaction.amount <= amount_max)
+                pre_result = await self.db.execute(
+                    select(func.coalesce(func.sum(Transaction.amount), 0)).where(*pre_filter)
+                )
+                initial_balance += pre_result.scalar() or Decimal("0")
             return await self._cashflow_daily(base_filter, initial_balance)
         return await self._cashflow_monthly(base_filter)
 
@@ -247,6 +279,35 @@ class TransactionService:
                 "count": row.count,
             })
         return data
+
+    async def get_balance_at_date(
+        self,
+        user: User,
+        date_at: date,
+        account_id: int | None = None,
+    ) -> Decimal:
+        """Return total balance at date_at (inclusive): initial_balance + sum(txns where date <= date_at)."""
+        clauses = [Account.user_id == user.id, Account.status == "active"]
+        if account_id:
+            clauses.append(Account.id == account_id)
+        result = await self.db.execute(select(Account.id).where(*clauses))
+        account_ids = [r for r in result.scalars().all()]
+
+        total = Decimal("0")
+        for acc_id in account_ids:
+            acct = await self.db.get(Account, acc_id)
+            if not acct:
+                continue
+            txn_sum_result = await self.db.execute(
+                select(func.coalesce(func.sum(Transaction.amount), 0)).where(
+                    Transaction.account_id == acc_id,
+                    Transaction.date <= date_at,
+                    Transaction.deleted_at.is_(None),
+                )
+            )
+            txn_sum = txn_sum_result.scalar() or Decimal("0")
+            total += acct.initial_balance + txn_sum
+        return total
 
     async def create_transaction(self, data: TransactionCreate, user: User) -> Transaction:
         """Create a transaction manually."""

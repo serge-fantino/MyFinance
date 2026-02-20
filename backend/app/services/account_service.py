@@ -35,6 +35,8 @@ class AccountService:
                 "type": acc.type,
                 "currency": acc.currency,
                 "bank_name": acc.bank_name,
+                "bank_id": getattr(acc, "bank_id", None),
+                "branch_id": getattr(acc, "branch_id", None),
                 "initial_balance": acc.initial_balance,
                 "color": acc.color,
                 "status": acc.status,
@@ -54,6 +56,8 @@ class AccountService:
             type=data.type,
             currency=data.currency,
             bank_name=data.bank_name,
+            bank_id=data.bank_id,
+            branch_id=data.branch_id,
             initial_balance=data.initial_balance,
             color=data.color,
         )
