@@ -9,6 +9,7 @@ import type {
   ClusterClassifyResult,
   ClustersResponse,
   ComputeEmbeddingsResult,
+  ImportPreviewResult,
   ImportResult,
   InterpretClusterRequest,
   InterpretClusterResult,
@@ -46,24 +47,68 @@ export const transactionService = {
     await api.delete(`/transactions/${id}`);
   },
 
-  async getCashflowMonthly(accountId?: number): Promise<CashflowMonthly[]> {
-    const response = await api.get("/transactions/cashflow", {
-      params: { granularity: "monthly", ...(accountId ? { account_id: accountId } : {}) },
-    });
+  async getCashflowMonthly(
+    accountId?: number,
+    filters?: { dateFrom?: string; dateTo?: string; categoryId?: number; direction?: string }
+  ): Promise<CashflowMonthly[]> {
+    const params: Record<string, unknown> = { granularity: "monthly" };
+    if (accountId) params.account_id = accountId;
+    if (filters?.dateFrom) params.date_from = filters.dateFrom;
+    if (filters?.dateTo) params.date_to = filters.dateTo;
+    if (filters?.categoryId) params.category_id = filters.categoryId;
+    if (filters?.direction === "income") params.amount_min = 0.01;
+    else if (filters?.direction === "expense") params.amount_max = -0.01;
+    const response = await api.get("/transactions/cashflow", { params });
     return response.data;
   },
 
-  async getCashflowDaily(accountId?: number): Promise<CashflowDaily[]> {
-    const response = await api.get("/transactions/cashflow", {
-      params: { granularity: "daily", ...(accountId ? { account_id: accountId } : {}) },
-    });
+  async getCashflowDaily(
+    accountId?: number,
+    filters?: { dateFrom?: string; dateTo?: string; categoryId?: number; direction?: string }
+  ): Promise<CashflowDaily[]> {
+    const params: Record<string, unknown> = { granularity: "daily" };
+    if (accountId) params.account_id = accountId;
+    if (filters?.dateFrom) params.date_from = filters.dateFrom;
+    if (filters?.dateTo) params.date_to = filters.dateTo;
+    if (filters?.categoryId) params.category_id = filters.categoryId;
+    if (filters?.direction === "income") params.amount_min = 0.01;
+    else if (filters?.direction === "expense") params.amount_max = -0.01;
+    const response = await api.get("/transactions/cashflow", { params });
     return response.data;
   },
 
-  async import(accountId: number, file: File): Promise<ImportResult> {
+  async getBalanceAtDate(date: string, accountId?: number): Promise<{ date: string; balance: number }> {
+    const params: Record<string, unknown> = { date };
+    if (accountId) params.account_id = accountId;
+    const response = await api.get("/transactions/balance-at-date", { params });
+    return response.data;
+  },
+
+  async importPreview(file: File): Promise<ImportPreviewResult> {
     const formData = new FormData();
     formData.append("file", file);
-    const response = await api.post(`/transactions/import?account_id=${accountId}`, formData, {
+    const response = await api.post("/transactions/import/preview", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    return response.data;
+  },
+
+  async import(
+    accountId: number,
+    file: File,
+    accountAction: "use" | "update" | "create" = "use",
+    newAccountName?: string,
+    applyBalanceReference?: boolean
+  ): Promise<ImportResult> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const params = new URLSearchParams({
+      account_id: String(accountId),
+      account_action: accountAction,
+    });
+    if (newAccountName) params.set("new_account_name", newAccountName);
+    if (applyBalanceReference) params.set("apply_balance_reference", "true");
+    const response = await api.post(`/transactions/import?${params}`, formData, {
       headers: { "Content-Type": "multipart/form-data" },
     });
     return response.data;

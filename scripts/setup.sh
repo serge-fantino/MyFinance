@@ -125,10 +125,8 @@ done
 
 # ── Run database migrations ──────────────────────────
 info "Running database migrations..."
-cd "$ROOT_DIR/backend"
-# Migrations will be run once the first migration is created
-# alembic upgrade head
-warn "No migrations yet — run 'make db-migrate msg=\"initial\"' after creating models"
+cd "$ROOT_DIR" && make db-upgrade
+ok "Migrations applied"
 
 echo ""
 

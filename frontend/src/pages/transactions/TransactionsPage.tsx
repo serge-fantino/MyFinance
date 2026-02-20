@@ -98,25 +98,56 @@ export default function TransactionsPage() {
     fetchCategories();
   }, [fetchCategories]);
 
-  // Fetch cashflow (both granularities for instant toggle)
+  // Fetch cashflow — full time range (first to last transaction), no date filter
+  // Chart scale = full range; brush zooms on selected period
   const accountIdNum = filters.accountId ? parseInt(filters.accountId) : undefined;
+  const cashflowFilters = useMemo(
+    () => ({
+      categoryId: filters.categoryId ? parseInt(filters.categoryId) : undefined,
+      direction: filters.direction || undefined,
+    }),
+    [filters.categoryId, filters.direction]
+  );
 
   const fetchCashflow = useCallback(async () => {
     try {
       const [monthly, daily] = await Promise.all([
-        transactionService.getCashflowMonthly(accountIdNum),
-        transactionService.getCashflowDaily(accountIdNum),
+        transactionService.getCashflowMonthly(accountIdNum, cashflowFilters),
+        transactionService.getCashflowDaily(accountIdNum, cashflowFilters),
       ]);
       setCashflowMonthly(monthly);
       setCashflowDaily(daily);
     } catch {
       // ignore — chart just won't show
     }
-  }, [accountIdNum]);
+  }, [accountIdNum, cashflowFilters]);
+
+  // Date range from cashflow (first to last transaction) — for default "Période" values
+  const dateRange = useMemo(() => {
+    const daily = cashflowDaily;
+    if (!daily?.length) return null;
+    return { minDate: daily[0].date, maxDate: daily[daily.length - 1].date };
+  }, [cashflowDaily]);
 
   useEffect(() => {
     fetchCashflow();
   }, [fetchCashflow]);
+
+  // Balance — toujours affichée : à dateTo si filtre, sinon solde actuel (aujourd'hui)
+  const [balanceAtDate, setBalanceAtDate] = useState<number | null>(null);
+  const balanceDate = filters.dateTo || new Date().toISOString().slice(0, 10);
+  const fetchBalanceAtDate = useCallback(async () => {
+    try {
+      const res = await transactionService.getBalanceAtDate(balanceDate, accountIdNum);
+      setBalanceAtDate(res.balance);
+    } catch {
+      setBalanceAtDate(null);
+    }
+  }, [balanceDate, accountIdNum]);
+
+  useEffect(() => {
+    fetchBalanceAtDate();
+  }, [fetchBalanceAtDate]);
 
   // Fetch transactions
   const fetchTransactions = useCallback(async () => {
@@ -201,9 +232,10 @@ export default function TransactionsPage() {
         setPage(1);
         fetchTransactions();
         fetchCashflow();
+        fetchBalanceAtDate();
       }
     },
-    [fetchTransactions, fetchCashflow]
+    [fetchTransactions, fetchCashflow, fetchBalanceAtDate]
   );
 
   // Build flat category list for the dropdown (must be before handleCategoryChange)
@@ -404,15 +436,28 @@ export default function TransactionsPage() {
 
       {error && <Alert variant="destructive">{error}</Alert>}
 
+      {/* Filters — apply to entire page */}
+      <TransactionFilters
+        filters={filters}
+        onChange={handleFilterChange}
+        accounts={accounts}
+        categories={categories}
+        onCategoryDropdownOpen={fetchCategories}
+        dateRange={dateRange}
+      />
+
       {/* KPIs — always reflect current filter selection */}
       <TransactionKPIs
         filteredCount={data?.meta.total ?? 0}
         filteredIncome={data?.meta.total_income ?? 0}
         filteredExpenses={data?.meta.total_expenses ?? 0}
         filteredNet={data?.meta.total_net ?? 0}
+        balanceAtDate={balanceAtDate}
+        balanceDate={balanceDate}
+        hasDateFilter={!!filters.dateTo}
       />
 
-      {/* Cashflow chart */}
+      {/* Cashflow chart — filtered transactions */}
       <CashflowChart
         monthlyData={cashflowMonthly}
         dailyData={cashflowDaily}
@@ -420,15 +465,6 @@ export default function TransactionsPage() {
         onGranularityChange={setChartGranularity}
         onRangeSelect={handleChartRange}
         selectedRange={{ from: filters.dateFrom || null, to: filters.dateTo || null }}
-      />
-
-      {/* Filters */}
-      <TransactionFilters
-        filters={filters}
-        onChange={handleFilterChange}
-        accounts={accounts}
-        categories={categories}
-        onCategoryDropdownOpen={fetchCategories}
       />
 
       {/* Transaction table */}

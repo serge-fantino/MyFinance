@@ -76,6 +76,27 @@ export interface PaginatedTransactions {
   };
 }
 
+export interface FileBalanceInfo {
+  date: string;   // ISO date
+  amount: number;
+  source: string;  // ledger | avail
+}
+
+export interface ImportPreviewResult {
+  format: string;
+  total_rows: number;
+  file_account_info: {
+    bank_id?: string;
+    branch_id?: string;
+    acct_id?: string;
+    acct_type?: string;
+    acct_key?: string;
+    institution?: string;
+    currency?: string;
+  } | null;
+  file_balance_info?: FileBalanceInfo | null;
+}
+
 export interface ImportResult {
   total_rows: number;
   imported_count: number;

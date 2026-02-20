@@ -18,6 +18,8 @@ class Account(Base, TimestampMixin):
     type: Mapped[str] = mapped_column(String(50), nullable=False)  # courant, epargne, carte, invest
     currency: Mapped[str] = mapped_column(String(3), default="EUR")
     bank_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bank_id: Mapped[str | None] = mapped_column(String(50), nullable=True)  # OFX BANKID
+    branch_id: Mapped[str | None] = mapped_column(String(50), nullable=True)  # OFX BRANCHID
     account_number_encrypted: Mapped[str | None] = mapped_column(String(512), nullable=True)
     initial_balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     color: Mapped[str | None] = mapped_column(String(7), nullable=True)  # hex color
