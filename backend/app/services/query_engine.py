@@ -27,6 +27,7 @@ from sqlalchemy.sql import Select
 from app.models.account import Account
 from app.models.category import Category
 from app.models.transaction import Transaction
+from app.models.transaction_cluster import TransactionCluster
 from app.services.metamodel import (
     ALL_SOURCES,
     ALLOWED_AGGREGATES,
@@ -270,11 +271,16 @@ def _resolve_column(ref: str, source_name: str):
 
 
 def _source_model(source_name: str):
-    return {"transactions": Transaction, "category": Category, "account": Account}[source_name]
+    return {
+        "transactions": Transaction,
+        "category": Category,
+        "account": Account,
+        "cluster": TransactionCluster,
+    }[source_name]
 
 
 def _relation_model(relation: str):
-    return {"category": Category, "account": Account}[relation]
+    return {"category": Category, "account": Account, "cluster": TransactionCluster}[relation]
 
 
 def _column_map(source_name: str) -> dict[str, str]:
@@ -338,18 +344,21 @@ def _compile_select(query: DatavizQuery) -> tuple[Select, list[str]]:
             col_names.append(label)
 
     # Build FROM clause
-    stmt = select(*columns).select_from(Transaction)
-
-    # Joins
-    needs_category = _needs_relation(query, "category")
-    needs_account = _needs_relation(query, "account")
-    if needs_category:
-        stmt = stmt.outerjoin(Category, Transaction.category_id == Category.id)
-    if needs_account:
-        stmt = stmt.outerjoin(Account, Transaction.account_id == Account.id)
-
-    # WHERE: always exclude soft-deleted
-    stmt = stmt.where(Transaction.deleted_at.is_(None))
+    if query.source == "cluster":
+        stmt = select(*columns).select_from(TransactionCluster)
+        needs_category = _needs_relation(query, "category")
+        if needs_category:
+            stmt = stmt.outerjoin(Category, TransactionCluster.category_id == Category.id)
+    else:
+        stmt = select(*columns).select_from(Transaction)
+        needs_category = _needs_relation(query, "category")
+        needs_account = _needs_relation(query, "account")
+        if needs_category:
+            stmt = stmt.outerjoin(Category, Transaction.category_id == Category.id)
+        if needs_account:
+            stmt = stmt.outerjoin(Account, Transaction.account_id == Account.id)
+        # WHERE: always exclude soft-deleted
+        stmt = stmt.where(Transaction.deleted_at.is_(None))
 
     # WHERE: LLM filters
     for f in query.filters:
@@ -385,16 +394,26 @@ def _resolve_select_column(ref: str, source_name: str):
     if ref == "label" and source_name == "transactions":
         return _label_column()
     if ref == "category.parent_name":
-        # Special: need to self-join to get parent name
-        # For simplicity, use a subquery-style approach
-        # Actually, Category has parent relationship, but for SQL we
-        # need a separate alias. For now return parent_id and handle post-query.
-        # Let's use a scalar subquery instead:
-        from sqlalchemy import literal_column
         parent_cat = Category.__table__.alias("parent_cat")
         return (
             select(parent_cat.c.name)
             .where(parent_cat.c.id == Category.parent_id)
+            .correlate(Category)
+            .scalar_subquery()
+        )
+    if ref == "category.level1_name":
+        level1_cat = Category.__table__.alias("level1_cat")
+        return (
+            select(level1_cat.c.name)
+            .where(level1_cat.c.id == Category.level1_id)
+            .correlate(Category)
+            .scalar_subquery()
+        )
+    if ref == "category.level2_name":
+        level2_cat = Category.__table__.alias("level2_cat")
+        return (
+            select(level2_cat.c.name)
+            .where(level2_cat.c.id == Category.level2_id)
             .correlate(Category)
             .scalar_subquery()
         )
@@ -578,6 +597,14 @@ def _needs_relation(query: DatavizQuery, relation: str) -> bool:
 
 def _default_columns(source_name: str) -> list[tuple[str, object]]:
     """Default columns when no groupBy/aggregates specified."""
+    if source_name == "cluster":
+        return [
+            ("name", TransactionCluster.name),
+            ("transaction_count", TransactionCluster.transaction_count),
+            ("total_amount", TransactionCluster.total_amount),
+            ("is_recurring", TransactionCluster.is_recurring),
+            ("recurrence_pattern", TransactionCluster.recurrence_pattern),
+        ]
     return [
         ("date", Transaction.date),
         ("label", _label_column()),
@@ -637,7 +664,10 @@ async def execute_query(
         ) from exc
 
     # ---- SECURITY: inject context (always) ----
-    stmt = stmt.where(Transaction.account_id.in_(context.account_ids))
+    if query.source == "cluster":
+        stmt = stmt.where(TransactionCluster.user_id == context.user_id)
+    else:
+        stmt = stmt.where(Transaction.account_id.in_(context.account_ids))
 
     # Capture SQL text for debug before executing
     sql_text = _compile_sql_text(stmt)

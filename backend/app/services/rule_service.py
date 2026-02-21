@@ -150,6 +150,9 @@ class RuleService:
         total_uncategorized = len(transactions)
         applied = 0
 
+        # Track which rule matched which transactions (for cluster creation)
+        rule_matches: dict[int, list[int]] = {}  # rule.id → [txn.id, ...]
+
         for txn in transactions:
             for rule in rules:
                 if self._matches(txn.label_raw, rule.pattern, rule.match_type):
@@ -158,9 +161,30 @@ class RuleService:
                     if rule.custom_label:
                         txn.label_clean = rule.custom_label
                     applied += 1
+                    rule_matches.setdefault(rule.id, []).append(txn.id)
                     break  # first matching rule wins
 
         await self.db.flush()
+
+        # Auto-create persistent clusters for each rule that matched
+        from app.services.cluster_service import ClusterService
+        cluster_service = ClusterService(self.db)
+        for rule in rules:
+            matched_ids = rule_matches.get(rule.id, [])
+            if not matched_ids:
+                continue
+            cluster_name = rule.custom_label or rule.pattern
+            await cluster_service.create_cluster(
+                user=user,
+                name=cluster_name,
+                transaction_ids=matched_ids,
+                account_id=account_id,
+                category_id=rule.category_id,
+                source="rule",
+                rule_id=rule.id,
+                rule_pattern=rule.pattern,
+                match_type=rule.match_type,
+            )
 
         logger.info(
             "rules_applied",

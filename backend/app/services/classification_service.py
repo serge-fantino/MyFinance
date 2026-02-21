@@ -256,6 +256,20 @@ class ClassificationService:
             cluster.custom_label = custom_label
         await self.db.flush()
 
+        # Auto-create a persistent TransactionCluster
+        from app.services.cluster_service import ClusterService
+        cluster_service = ClusterService(self.db)
+        cluster_name = custom_label or cluster.representative_label
+        await cluster_service.create_cluster(
+            user=user,
+            name=cluster_name,
+            transaction_ids=transaction_ids,
+            category_id=category_id,
+            source="classification",
+            rule_pattern=rule_pattern,
+            match_type="embedding",
+        )
+
         return result
 
     async def recluster(

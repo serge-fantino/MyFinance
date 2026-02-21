@@ -130,10 +130,13 @@ TRANSACTIONS_SOURCE = SourceDef(
 
 CATEGORY_SOURCE = SourceDef(
     name="category",
-    description="Catégories de dépenses/revenus",
+    description="Catégories de dépenses/revenus (hiérarchie: level1=racine, level2=sous-catégorie)",
     fields=[
         FieldDef("name", FieldType.NOMINAL, "Nom de la catégorie"),
         FieldDef("parent_name", FieldType.NOMINAL, "Nom de la catégorie parente (si sous-catégorie)"),
+        FieldDef("level", FieldType.ORDINAL, "Niveau hiérarchique (1=racine, 2=sous-catégorie, 3=détail)"),
+        FieldDef("level1_name", FieldType.NOMINAL, "Nom de la catégorie racine (level 1)"),
+        FieldDef("level2_name", FieldType.NOMINAL, "Nom de la catégorie de niveau 2"),
     ],
 )
 
@@ -144,6 +147,24 @@ ACCOUNT_SOURCE = SourceDef(
         FieldDef("name", FieldType.NOMINAL, "Nom du compte"),
         FieldDef("bank_name", FieldType.NOMINAL, "Nom de la banque"),
         FieldDef("type", FieldType.NOMINAL, "Type de compte (courant, epargne, carte, invest)"),
+    ],
+)
+
+CLUSTER_SOURCE = SourceDef(
+    name="cluster",
+    description="Groupes persistants de transactions similaires (plus fin que les catégories)",
+    fields=[
+        FieldDef("name", FieldType.NOMINAL, "Nom du cluster"),
+        FieldDef("source", FieldType.NOMINAL, "Origine (manual, classification, rule)"),
+        FieldDef("transaction_count", FieldType.QUANTITATIVE, "Nombre de transactions", aggregatable=True),
+        FieldDef("total_amount", FieldType.QUANTITATIVE, "Montant total", aggregatable=True),
+        FieldDef("total_amount_abs", FieldType.QUANTITATIVE, "Montant total en valeur absolue", aggregatable=True),
+        FieldDef("avg_amount", FieldType.QUANTITATIVE, "Montant moyen", aggregatable=True),
+        FieldDef("is_recurring", FieldType.NOMINAL, "Récurrent (true/false)"),
+        FieldDef("recurrence_pattern", FieldType.NOMINAL, "Fréquence (monthly, weekly, quarterly, yearly, irregular)"),
+    ],
+    relations=[
+        RelationDef("category", "Catégorie associée au cluster"),
     ],
 )
 
@@ -160,7 +181,7 @@ BALANCE_SOURCE = SourceDef(
 
 # -- registry --
 ALL_SOURCES: dict[str, SourceDef] = {
-    s.name: s for s in [TRANSACTIONS_SOURCE, CATEGORY_SOURCE, ACCOUNT_SOURCE, BALANCE_SOURCE]
+    s.name: s for s in [TRANSACTIONS_SOURCE, CATEGORY_SOURCE, ACCOUNT_SOURCE, CLUSTER_SOURCE, BALANCE_SOURCE]
 }
 
 ALLOWED_AGGREGATES: set[str] = {a.value for a in AggregateFunction}
