@@ -29,6 +29,7 @@ from app.services.llm_provider import get_llm_provider
 from app.services.metamodel import metamodel_prompt_text
 from app.services.query_engine import (
     QueryContext,
+    QueryExecutionError,
     QueryValidationError,
     execute_query,
 )
@@ -216,11 +217,36 @@ class ChatService:
 
         # Call LLM (timed)
         llm_start = time.monotonic()
-        response_text = await self.llm.chat(
-            system_prompt=system_prompt,
-            messages=history,
-            temperature=0.3,
-        )
+        try:
+            response_text = await self.llm.chat(
+                system_prompt=system_prompt,
+                messages=history,
+                temperature=0.3,
+            )
+        except Exception as e:
+            llm_duration_ms = (time.monotonic() - llm_start) * 1000
+            error_msg = f"Erreur LLM ({type(self.llm).__name__}): {e}"
+            logger.error("llm_call_error", error=str(e), provider=type(self.llm).__name__)
+
+            result = {
+                "conversation_id": conversation.id,
+                "message": "",
+                "charts": [],
+                "metadata": {"provider": type(self.llm).__name__},
+                "error": error_msg,
+            }
+            if debug:
+                result["debug"] = {
+                    "llm_raw_response": f"[ERREUR] {error_msg}",
+                    "dataviz_blocks_found": 0,
+                    "account_scope": scope_account_ids,
+                    "block_traces": [],
+                    "system_prompt_length": len(system_prompt),
+                    "llm_duration_ms": round(llm_duration_ms, 1),
+                    "error": error_msg,
+                }
+            return result
+
         llm_duration_ms = (time.monotonic() - llm_start) * 1000
 
         # Parse dataviz blocks and execute queries
@@ -284,12 +310,14 @@ class ChatService:
     ) -> tuple[dict | None, dict | None]:
         """Execute a single dataviz block: run query, return (chart, debug_trace).
 
+        Always returns a debug trace (even without debug flag) for error blocks,
+        so the caller can decide what to surface.
+
         Returns:
             (chart_dict_or_None, debug_trace_dict_or_None)
         """
         query_spec = block.get("query", {})
         viz_spec = block.get("viz", {})
-        trace = None
 
         start = time.monotonic()
         try:
@@ -298,6 +326,7 @@ class ChatService:
             )
             duration_ms = (time.monotonic() - start) * 1000
 
+            trace = None
             if collect_debug:
                 trace = {
                     "query": query_spec,
@@ -314,31 +343,43 @@ class ChatService:
         except QueryValidationError as e:
             logger.warning("dataviz_query_validation_error", error=str(e))
             duration_ms = (time.monotonic() - start) * 1000
-            if collect_debug:
-                trace = {
-                    "query": query_spec,
-                    "viz": viz_spec,
-                    "sql": None,
-                    "row_count": None,
-                    "data_sample": [],
-                    "error": f"Validation: {e}",
-                    "duration_ms": round(duration_ms, 1),
-                }
+            trace = {
+                "query": query_spec,
+                "viz": viz_spec,
+                "sql": None,
+                "row_count": None,
+                "data_sample": [],
+                "error": f"Validation: {e}",
+                "duration_ms": round(duration_ms, 1),
+            }
+            return None, trace
+
+        except QueryExecutionError as e:
+            logger.error("dataviz_query_execution_error", error=str(e), sql=e.sql)
+            duration_ms = (time.monotonic() - start) * 1000
+            trace = {
+                "query": e.query_dsl or query_spec,
+                "viz": viz_spec,
+                "sql": e.sql,
+                "row_count": None,
+                "data_sample": [],
+                "error": str(e),
+                "duration_ms": round(duration_ms, 1),
+            }
             return None, trace
 
         except Exception as e:
-            logger.error("dataviz_query_execution_error", error=str(e))
+            logger.error("dataviz_query_unexpected_error", error=str(e))
             duration_ms = (time.monotonic() - start) * 1000
-            if collect_debug:
-                trace = {
-                    "query": query_spec,
-                    "viz": viz_spec,
-                    "sql": None,
-                    "row_count": None,
-                    "data_sample": [],
-                    "error": f"Execution: {e}",
-                    "duration_ms": round(duration_ms, 1),
-                }
+            trace = {
+                "query": query_spec,
+                "viz": viz_spec,
+                "sql": None,
+                "row_count": None,
+                "data_sample": [],
+                "error": f"Erreur inattendue: {type(e).__name__}: {e}",
+                "duration_ms": round(duration_ms, 1),
+            }
             return None, trace
 
     async def _resolve_account_scope(

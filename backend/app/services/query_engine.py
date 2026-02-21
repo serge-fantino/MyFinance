@@ -91,6 +91,19 @@ class QueryValidationError(Exception):
     """Raised when the LLM query DSL is invalid."""
 
 
+class QueryExecutionError(Exception):
+    """Raised when a validated query fails at execution time (SQL error).
+
+    Carries the compiled SQL and original query DSL so the debug layer
+    can display exactly what went wrong.
+    """
+
+    def __init__(self, message: str, *, sql: str | None = None, query_dsl: dict | None = None):
+        super().__init__(message)
+        self.sql = sql
+        self.query_dsl = query_dsl
+
+
 def parse_query(raw: dict) -> DatavizQuery:
     """Parse and validate a raw JSON query dict into a DatavizQuery."""
     source = raw.get("source")
@@ -516,7 +529,14 @@ async def execute_query(
         data, col_names = await _execute_balance_query(db, query, context)
         return data, col_names, "-- virtual source: balance (no SQL)"
 
-    stmt, col_names = _compile_select(query)
+    try:
+        stmt, col_names = _compile_select(query)
+    except Exception as exc:
+        raise QueryExecutionError(
+            f"Erreur de compilation : {exc}",
+            sql=None,
+            query_dsl=raw_query,
+        ) from exc
 
     # ---- SECURITY: inject context (always) ----
     stmt = stmt.where(Transaction.account_id.in_(context.account_ids))
@@ -526,7 +546,17 @@ async def execute_query(
 
     logger.debug("query_engine_execute", source=query.source, col_names=col_names)
 
-    result = await db.execute(stmt)
+    try:
+        result = await db.execute(stmt)
+    except Exception as exc:
+        # Roll back the failed statement so the session stays usable
+        await db.rollback()
+        raise QueryExecutionError(
+            f"Erreur SQL : {exc}",
+            sql=sql_text,
+            query_dsl=raw_query,
+        ) from exc
+
     rows = result.all()
 
     # Convert to list of dicts

@@ -55,6 +55,7 @@ class DebugInfo(BaseModel):
     block_traces: list[DebugBlockTrace] = []
     system_prompt_length: int = 0       # character count of the system prompt
     llm_duration_ms: float | None = None
+    error: str | None = None            # top-level error (e.g. LLM failure)
 
 
 class ChatResponse(BaseModel):
@@ -63,6 +64,7 @@ class ChatResponse(BaseModel):
     charts: list[ChartResult] = []
     metadata: dict | None = None
     debug: DebugInfo | None = None  # only populated when debug=True
+    error: str | None = None        # non-null when a service error occurred
 
 
 class ConversationResponse(BaseModel):

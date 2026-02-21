@@ -1,5 +1,6 @@
 """AI assistant API routes."""
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +16,7 @@ from app.schemas.ai import (
 )
 from app.services.chat_service import ChatService
 
+logger = structlog.get_logger()
 router = APIRouter()
 
 
@@ -26,14 +28,27 @@ async def chat(
 ):
     """Send a message to the AI assistant."""
     service = ChatService(db)
-    result = await service.chat(
-        user=current_user,
-        content=message.content,
-        conversation_id=message.conversation_id,
-        account_ids=message.account_ids,
-        debug=message.debug,
-    )
-    return ChatResponse(**result)
+    try:
+        result = await service.chat(
+            user=current_user,
+            content=message.content,
+            conversation_id=message.conversation_id,
+            account_ids=message.account_ids,
+            debug=message.debug,
+        )
+        return ChatResponse(**result)
+    except Exception as e:
+        logger.error("chat_endpoint_error", error=str(e), error_type=type(e).__name__)
+        error_msg = f"Erreur serveur: {type(e).__name__}: {e}"
+        debug_info = None
+        if message.debug:
+            debug_info = {"error": error_msg}
+        return ChatResponse(
+            conversation_id=message.conversation_id or 0,
+            message="",
+            error=error_msg,
+            debug=debug_info,
+        )
 
 
 @router.get("/conversations", response_model=list[ConversationResponse])

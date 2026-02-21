@@ -38,6 +38,7 @@ interface DisplayMessage {
   debugInfo?: DebugInfo | null;
   metadata?: Record<string, unknown>;
   created_at?: string;
+  isError?: boolean;
 }
 
 // Simple markdown renderer (bold, italic, headers, lists, code)
@@ -85,6 +86,13 @@ function DebugPanel({ debug }: { debug: DebugInfo }) {
 
       {open && (
         <div className="px-3 pb-3 space-y-3">
+          {/* Top-level error */}
+          {debug.error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-2 text-red-700 text-xs">
+              <span className="font-medium">Erreur : </span>{debug.error}
+            </div>
+          )}
+
           {/* Summary */}
           <div className="flex flex-wrap gap-3 text-[11px] text-amber-700">
             <span>Scope: {debug.account_scope.length} comptes (IDs: {debug.account_scope.join(", ")})</span>
@@ -209,6 +217,13 @@ function MessageBubble({ msg, showDebug }: { msg: DisplayMessage; showDebug: boo
               : "bg-muted rounded-tl-sm"
           }`}
         >
+          {/* Error indicator */}
+          {msg.isError && (
+            <div className="flex items-center gap-1.5 text-red-600 mb-1.5">
+              <AlertCircle className="w-3.5 h-3.5" />
+              <span className="text-xs font-medium">Erreur</span>
+            </div>
+          )}
           {/* Text content */}
           {msg.content && (
             <div
@@ -407,29 +422,35 @@ export default function AIChatPage() {
           debug: debugMode || undefined,
         });
 
-        if (!activeConversation) {
+        if (!activeConversation && response.conversation_id) {
           setActiveConversation(response.conversation_id);
         }
 
+        // Build assistant message — may be a success or a server-side error
         const assistantMsg: DisplayMessage = {
           role: "assistant",
-          content: response.message,
+          content: response.error
+            ? `Désolé, une erreur s'est produite : ${response.error}`
+            : response.message,
           charts: response.charts,
           debugInfo: response.debug,
           metadata: response.metadata,
           created_at: new Date().toISOString(),
+          isError: !!response.error,
         };
         setMessages((prev) => [...prev, assistantMsg]);
         loadConversations();
       } catch (err: unknown) {
+        // Network-level error (API unreachable, 401, etc.)
         const errorMessage =
           err instanceof Error ? err.message : "Erreur lors de l'envoi du message";
         setMessages((prev) => [
           ...prev,
           {
             role: "assistant",
-            content: `D\u00e9sol\u00e9, une erreur s'est produite : ${errorMessage}`,
+            content: `Désolé, une erreur s'est produite : ${errorMessage}`,
             created_at: new Date().toISOString(),
+            isError: true,
           },
         ]);
       } finally {

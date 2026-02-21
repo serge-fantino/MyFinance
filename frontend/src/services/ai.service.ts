@@ -33,6 +33,7 @@ export interface DebugInfo {
   block_traces: DebugBlockTrace[];
   system_prompt_length: number;
   llm_duration_ms: number | null;
+  error: string | null;
 }
 
 export interface ChatResponse {
@@ -43,6 +44,7 @@ export interface ChatResponse {
     provider?: string;
   };
   debug?: DebugInfo | null;
+  error?: string | null;
 }
 
 export interface MessageItem {
