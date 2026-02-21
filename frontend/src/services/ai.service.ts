@@ -42,6 +42,7 @@ export interface ChatResponse {
   charts: ChartResult[];
   metadata?: {
     provider?: string;
+    model_name?: string;
   };
   debug?: DebugInfo | null;
   error?: string | null;
@@ -69,9 +70,18 @@ export interface ConversationDetail {
   created_at: string;
 }
 
+export interface ProviderOption {
+  id: string;
+  label: string;
+  model: string;
+}
+
 export interface ProviderStatus {
   provider: string;
   available: boolean;
+  model_name?: string;
+  providers?: ProviderOption[];
+  current_provider?: string;
 }
 
 export const aiService = {
@@ -96,6 +106,11 @@ export const aiService = {
 
   async getProviderStatus(): Promise<ProviderStatus> {
     const response = await api.get("/ai/status");
+    return response.data;
+  },
+
+  async updateProviderConfig(provider: string): Promise<ProviderStatus> {
+    const response = await api.patch("/ai/config", { provider });
     return response.data;
   },
 };

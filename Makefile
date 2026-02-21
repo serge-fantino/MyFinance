@@ -4,7 +4,7 @@
 # Usage: make <target>
 # Run `make help` to see all available commands.
 
-.PHONY: help setup dev dev-infra dev-back dev-front stop test test-back test-front lint lint-back lint-front db-migrate db-upgrade db-downgrade clean docker-up docker-down ollama-pull ollama-status ollama-check ollama-verify-metal ollama-test-interactive ollama-native-mac install-ollama-mac
+.PHONY: help setup deps dev dev-infra dev-back dev-front stop test test-back test-front lint lint-back lint-front db-migrate db-upgrade db-downgrade clean docker-up docker-down ollama-pull ollama-status ollama-check ollama-verify-metal ollama-test-interactive ollama-native-mac install-ollama-mac
 
 # Default LLM model for Ollama (override with make ollama-pull LLM_MODEL=llama3.2)
 LLM_MODEL ?= mistral
@@ -33,6 +33,15 @@ help: ## Show this help
 
 setup: ## First-time project setup (installs everything)
 	@./scripts/setup.sh
+
+deps: ## Sync backend Python dependencies (run after pulling new code)
+	@if [ ! -d "backend/venv" ]; then \
+		echo "Creating venv..."; \
+		cd backend && python3 -m venv venv && cd ..; \
+	fi
+	$(PIP) install -q --upgrade pip
+	$(PIP) install -q -r backend/requirements.txt
+	@echo "✓ Backend dependencies synced"
 
 # ═══════════════════════════════════════════════════════
 # DEVELOPMENT

@@ -30,10 +30,25 @@ class VizSpec(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class ChartTrace(BaseModel):
+    """Debug trace for a chart (query, viz spec, SQL)."""
+    query: dict = {}
+    viz: dict = {}
+    sql: str | None = None
+    row_count: int | None = None
+    error: str | None = None
+    duration_ms: float | None = None
+
+    model_config = {"extra": "allow"}
+
+
 class ChartResult(BaseModel):
     """A fully resolved chart: viz spec + query result data."""
     viz: VizSpec
     data: list[dict]
+    trace: ChartTrace | None = None  # for debug view in frontend
+
+    model_config = {"extra": "allow"}
 
 
 class DebugBlockTrace(BaseModel):
@@ -93,6 +108,28 @@ class ConversationDetailResponse(BaseModel):
     created_at: datetime
 
 
+class ProviderOption(BaseModel):
+    """Available provider option for selection."""
+    id: str
+    label: str
+    model: str
+
+
 class ProviderStatusResponse(BaseModel):
     provider: str
     available: bool
+    model_name: str = ""
+    providers: list[ProviderOption] = []
+    current_provider: str = ""  # effective provider id (may differ from env if overridden)
+
+
+class AIConfigUpdate(BaseModel):
+    """Request to update AI config."""
+    provider: str | None = None
+
+
+class QueryExecuteRequest(BaseModel):
+    """Request to execute a raw dataviz query (interactive Query module)."""
+    query: dict  # raw query DSL (source, fields, filters, groupBy, aggregates, orderBy, limit)
+    viz: dict    # viz spec (chart, title, encoding, columns)
+    account_ids: list[int] | None = None  # scope; None = all user accounts

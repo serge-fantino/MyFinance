@@ -22,23 +22,66 @@ import {
   Wallet,
   Check,
   Bug,
+  RefreshCw,
+  Settings2,
+  Pencil,
+  RotateCcw,
 } from "lucide-react";
 import { aiService, Conversation, ConversationDetail, ChatResponse } from "../../services/ai.service";
-import type { DebugInfo } from "../../services/ai.service";
+import type { DebugInfo, ProviderStatus } from "../../services/ai.service";
 import { accountService } from "../../services/account.service";
 import type { Account } from "../../types/account.types";
-import ChatChart from "../../components/chat/ChatChart";
-import type { ChartResult } from "../../components/chat/ChatChart";
+import ChatChart, {
+  attachmentToPromptText,
+  parseAttachmentFromClipboard,
+} from "../../components/chat/ChatChart";
+import type { ChartResult, DatavizAttachment } from "../../components/chat/ChatChart";
+import { BarChart2, X } from "lucide-react";
 
 interface DisplayMessage {
   id?: number;
   role: "user" | "assistant";
   content: string;
   charts?: ChartResult[];
+  attachment?: DatavizAttachment | null;
   debugInfo?: DebugInfo | null;
   metadata?: Record<string, unknown>;
   created_at?: string;
   isError?: boolean;
+}
+
+// Parse message with {{CHART:i}} placeholders into segments for in-place rendering
+function parseMessageSegments(
+  content: string,
+  charts: ChartResult[] = []
+): Array<{ type: "text"; content: string } | { type: "chart"; index: number }> {
+  const segments: Array<{ type: "text"; content: string } | { type: "chart"; index: number }> = [];
+  const regex = /\{\{CHART:(\d+)\}\}/g;
+  let lastIndex = 0;
+  let match;
+  const hasPlaceholders = regex.test(content);
+  regex.lastIndex = 0; // reset after test
+  if (hasPlaceholders) {
+    while ((match = regex.exec(content)) !== null) {
+      if (match.index > lastIndex) {
+        segments.push({ type: "text", content: content.slice(lastIndex, match.index) });
+      }
+      const chartIndex = parseInt(match[1], 10);
+      if (chartIndex < charts.length) {
+        segments.push({ type: "chart", index: chartIndex });
+      }
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < content.length) {
+      segments.push({ type: "text", content: content.slice(lastIndex) });
+    }
+  } else {
+    if (content.trim()) segments.push({ type: "text", content });
+    for (let i = 0; i < charts.length; i++) {
+      segments.push({ type: "chart", index: i });
+    }
+  }
+  return segments;
 }
 
 // Simple markdown renderer (bold, italic, headers, lists, code)
@@ -197,7 +240,21 @@ function DebugPanel({ debug }: { debug: DebugInfo }) {
   );
 }
 
-function MessageBubble({ msg, showDebug }: { msg: DisplayMessage; showDebug: boolean }) {
+function MessageBubble({
+  msg,
+  showDebug,
+  onInsertToChat,
+  isLastUserMessage,
+  onEditLastMessage,
+  onResendLastMessage,
+}: {
+  msg: DisplayMessage;
+  showDebug: boolean;
+  onInsertToChat?: (text: string) => void;
+  isLastUserMessage?: boolean;
+  onEditLastMessage?: (content: string) => void;
+  onResendLastMessage?: (content: string) => void;
+}) {
   const isUser = msg.role === "user";
 
   return (
@@ -209,7 +266,7 @@ function MessageBubble({ msg, showDebug }: { msg: DisplayMessage; showDebug: boo
       >
         {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
       </div>
-      <div className={`max-w-[80%] ${isUser ? "text-right" : ""}`}>
+      <div className={`max-w-[80%] ${isUser ? "text-right" : ""} flex-1 min-w-0`}>
         <div
           className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
             isUser
@@ -224,31 +281,154 @@ function MessageBubble({ msg, showDebug }: { msg: DisplayMessage; showDebug: boo
               <span className="text-xs font-medium">Erreur</span>
             </div>
           )}
-          {/* Text content */}
-          {msg.content && (
-            <div
-              className="prose prose-sm max-w-none dark:prose-invert"
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
-            />
+          {/* Attachment (user message with dataviz) */}
+          {msg.attachment && (
+            <div className="mb-2">
+              <AttachmentBlock attachment={msg.attachment} />
+            </div>
           )}
-          {/* Charts from query engine */}
-          {msg.charts && msg.charts.map((chart, i) => (
-            <ChatChart key={i} chart={chart} />
-          ))}
+          {/* Content with charts in-place */}
+          {msg.content && (() => {
+            const segments = parseMessageSegments(msg.content, msg.charts ?? []);
+            if (segments.length === 0) return null;
+            return (
+              <div className="prose prose-sm max-w-none dark:prose-invert space-y-2">
+                {segments.map((seg, i) =>
+                  seg.type === "text" ? (
+                    seg.content.trim() ? (
+                      <div
+                        key={i}
+                        dangerouslySetInnerHTML={{ __html: renderMarkdown(seg.content) }}
+                      />
+                    ) : null
+                  ) : msg.charts && seg.index < msg.charts.length ? (
+                    <ChatChart
+                      key={i}
+                      chart={msg.charts[seg.index]}
+                      onInsertToChat={onInsertToChat}
+                    />
+                  ) : null
+                )}
+              </div>
+            );
+          })()}
         </div>
+        {/* Edit / Resend buttons — last user message only */}
+        {isUser && isLastUserMessage && (onEditLastMessage || onResendLastMessage) && (
+          <div className="flex items-center gap-1 mt-2 justify-end">
+            {onEditLastMessage && (
+              <button
+                onClick={() => onEditLastMessage(msg.content)}
+                className="flex items-center gap-1 px-2 py-1 text-[11px] rounded hover:bg-primary/20 text-primary transition-colors"
+                title="Modifier et renvoyer"
+              >
+                <Pencil className="w-3 h-3" />
+                Modifier
+              </button>
+            )}
+            {onResendLastMessage && (
+              <button
+                onClick={() => onResendLastMessage(msg.content)}
+                className="flex items-center gap-1 px-2 py-1 text-[11px] rounded hover:bg-primary/20 text-primary transition-colors"
+                title="Relancer la question"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Relancer
+              </button>
+            )}
+          </div>
+        )}
         {/* Debug panel — outside the bubble, full width */}
         {showDebug && msg.debugInfo && (
           <DebugPanel debug={msg.debugInfo} />
         )}
+        {/* Legend: model + date/time for assistant, time only for user */}
         {msg.created_at && (
           <div className="text-[10px] text-muted-foreground mt-1 px-1">
-            {new Date(msg.created_at).toLocaleTimeString("fr-FR", {
+            {!isUser && msg.metadata?.model_name && (
+              <span>{String(msg.metadata.model_name)} · </span>
+            )}
+            {new Date(msg.created_at).toLocaleString("fr-FR", {
+              day: "2-digit",
+              month: "2-digit",
+              year: "numeric",
               hour: "2-digit",
               minute: "2-digit",
             })}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Compact attachment block for display in user message or above input */
+function AttachmentBlock({
+  attachment,
+  compact = false,
+  onRemove,
+}: {
+  attachment: DatavizAttachment;
+  compact?: boolean;
+  onRemove?: () => void;
+}) {
+  const { title, data } = attachment;
+
+  return (
+    <div
+      className={`rounded-lg border bg-muted/30 overflow-hidden ${
+        compact ? "max-w-xs" : ""
+      }`}
+    >
+      <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/50">
+        <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+          <BarChart2 className="w-4 h-4 text-primary" />
+        </div>
+        <span className="text-sm font-medium truncate flex-1">{title}</span>
+        <span className="text-xs text-muted-foreground">
+          {data.length} ligne{data.length > 1 ? "s" : ""}
+        </span>
+        {onRemove && (
+          <button
+            onClick={onRemove}
+            className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+            title="Retirer"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        )}
+      </div>
+      {!compact && (
+        <div className="p-2 max-h-32 overflow-y-auto">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr>
+                {attachment.columns.slice(0, 4).map((c, i) => (
+                  <th key={i} className="text-left px-1.5 py-0.5 font-medium text-muted-foreground">
+                    {c.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {attachment.data.slice(0, 5).map((row, ri) => (
+                <tr key={ri} className="border-t border-muted/50">
+                  {attachment.columns.slice(0, 4).map((c, ci) => (
+                    <td key={ci} className="px-1.5 py-0.5">
+                      {row[c.field] != null ? String(row[c.field]) : ""}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {attachment.data.length > 5 && (
+            <div className="text-[10px] text-muted-foreground mt-1">
+              ... et {attachment.data.length - 5} autres lignes
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -267,7 +447,10 @@ export default function AIChatPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [providerStatus, setProviderStatus] = useState<{ provider: string; available: boolean } | null>(null);
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
+  const [providerMenuOpen, setProviderMenuOpen] = useState(false);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [attachedDataviz, setAttachedDataviz] = useState<DatavizAttachment | null>(null);
 
   // Account scope
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -280,6 +463,7 @@ export default function AIChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const accountMenuRef = useRef<HTMLDivElement>(null);
+  const providerMenuRef = useRef<HTMLDivElement>(null);
 
   // Load on mount
   useEffect(() => {
@@ -306,6 +490,9 @@ export default function AIChatPage() {
     function handleClick(e: MouseEvent) {
       if (accountMenuRef.current && !accountMenuRef.current.contains(e.target as Node)) {
         setAccountMenuOpen(false);
+      }
+      if (providerMenuRef.current && !providerMenuRef.current.contains(e.target as Node)) {
+        setProviderMenuOpen(false);
       }
     }
     document.addEventListener("mousedown", handleClick);
@@ -341,6 +528,35 @@ export default function AIChatPage() {
     }
   }
 
+  async function handleProviderChange(providerId: string) {
+    setConfigLoading(true);
+    setProviderMenuOpen(false);
+    try {
+      const status = await aiService.updateProviderConfig(providerId);
+      setProviderStatus(status);
+    } catch {
+      await loadProviderStatus();
+    } finally {
+      setConfigLoading(false);
+    }
+  }
+
+  async function handleReloadProvider() {
+    setConfigLoading(true);
+    try {
+      const current =
+        providerStatus?.current_provider ??
+        providerStatus?.provider?.toLowerCase().replace(/chatprovider$/i, "") ??
+        "ollama";
+      const status = await aiService.updateProviderConfig(current);
+      setProviderStatus(status);
+    } catch {
+      await loadProviderStatus();
+    } finally {
+      setConfigLoading(false);
+    }
+  }
+
   async function loadConversation(id: number) {
     try {
       const detail: ConversationDetail = await aiService.getConversation(id);
@@ -352,8 +568,8 @@ export default function AIChatPage() {
             id: m.id,
             role: m.role as "user" | "assistant",
             content: m.content,
-            // Charts from metadata if available (stored in DB)
             charts: (m.metadata as Record<string, unknown>)?.charts as ChartResult[] | undefined,
+            metadata: m.metadata,
             created_at: m.created_at,
           }))
       );
@@ -366,7 +582,27 @@ export default function AIChatPage() {
     setActiveConversation(null);
     setMessages([]);
     setInput("");
+    setAttachedDataviz(null);
     inputRef.current?.focus();
+  }
+
+  function handleEditLastMessage(content: string) {
+    setMessages((prev) => {
+      const lastUserIdx = prev.map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i >= 0).pop() ?? -1;
+      if (lastUserIdx < 0) return prev;
+      return prev.slice(0, lastUserIdx);
+    });
+    setInput(content);
+    inputRef.current?.focus();
+  }
+
+  function handleResendLastMessage(content: string) {
+    setMessages((prev) => {
+      const lastUserIdx = prev.map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i >= 0).pop() ?? -1;
+      if (lastUserIdx < 0) return prev;
+      return prev.slice(0, lastUserIdx);
+    });
+    sendMessage(content);
   }
 
   async function deleteConversation(id: number, e: React.MouseEvent) {
@@ -400,13 +636,19 @@ export default function AIChatPage() {
 
   const sendMessage = useCallback(
     async (text?: string) => {
-      const content = (text || input).trim();
-      if (!content || loading) return;
+      const prompt = (text || input).trim();
+      const hasAttachment = !!attachedDataviz;
+      const contentToSend = hasAttachment
+        ? attachmentToPromptText(attachedDataviz!) + "\n\n" + (prompt || "Peux-tu analyser ces données ?")
+        : prompt;
+      if (!contentToSend || loading) return;
 
       setInput("");
+      setAttachedDataviz(null);
       const userMsg: DisplayMessage = {
         role: "user",
-        content,
+        content: prompt || (hasAttachment ? "Analyse des données jointes" : ""),
+        attachment: hasAttachment ? attachedDataviz! : undefined,
         created_at: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, userMsg]);
@@ -414,7 +656,7 @@ export default function AIChatPage() {
 
       try {
         const response: ChatResponse = await aiService.chat({
-          content,
+          content: contentToSend,
           conversation_id: activeConversation || undefined,
           account_ids: selectedAccountIds.length < accounts.length
             ? selectedAccountIds
@@ -457,7 +699,7 @@ export default function AIChatPage() {
         setLoading(false);
       }
     },
-    [input, loading, activeConversation, selectedAccountIds, accounts.length, debugMode]
+    [input, loading, activeConversation, selectedAccountIds, accounts.length, debugMode, attachedDataviz]
   );
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -472,7 +714,11 @@ export default function AIChatPage() {
       ? "Ollama (local)"
       : providerStatus?.provider === "OpenAIChatProvider"
       ? "OpenAI"
-      : "IA";
+      : providerStatus?.provider === "AnthropicChatProvider"
+      ? "Anthropic (Claude)"
+      : providerStatus?.provider === "GeminiChatProvider"
+      ? "Google Gemini"
+      : providerStatus?.provider ?? "IA";
 
   const accountScopeLabel =
     selectedAccountIds.length === 0
@@ -591,7 +837,29 @@ export default function AIChatPage() {
               </div>
             </div>
           ) : (
-            messages.map((msg, i) => <MessageBubble key={i} msg={msg} showDebug={debugMode} />)
+            messages.map((msg, i) => {
+              const lastUserIdx = (() => {
+                for (let j = messages.length - 1; j >= 0; j--) {
+                  if (messages[j].role === "user") return j;
+                }
+                return -1;
+              })();
+              return (
+                <MessageBubble
+                  key={i}
+                  msg={msg}
+                  showDebug={debugMode}
+                onAddAsAttachment={(att) => {
+                  setAttachedDataviz(att);
+                  setInput((prev) => prev || "Peux-tu analyser ces données et me donner des insights ?");
+                  inputRef.current?.focus();
+                }}
+                  isLastUserMessage={msg.role === "user" && i === lastUserIdx}
+                  onEditLastMessage={handleEditLastMessage}
+                  onResendLastMessage={handleResendLastMessage}
+                />
+              );
+            })
           )}
 
           {loading && (
@@ -621,12 +889,33 @@ export default function AIChatPage() {
 
         {/* Input area */}
         <div className="flex-shrink-0 border-t p-3 bg-background">
+          {/* Attachment preview above input */}
+          {attachedDataviz && (
+            <div className="max-w-3xl mx-auto mb-2">
+              <AttachmentBlock
+                attachment={attachedDataviz}
+                compact
+                onRemove={() => setAttachedDataviz(null)}
+              />
+            </div>
+          )}
           <div className="flex items-end gap-2 max-w-3xl mx-auto">
             <textarea
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
+              onPaste={(e) => {
+                const pasted = e.clipboardData?.getData("text");
+                if (pasted) {
+                  const att = parseAttachmentFromClipboard(pasted);
+                  if (att) {
+                    e.preventDefault();
+                    setAttachedDataviz(att);
+                    setInput((prev) => prev || "Peux-tu analyser ces données et me donner des insights ?");
+                  }
+                }
+              }}
               placeholder="Posez une question sur vos finances..."
               rows={1}
               className="flex-1 resize-none rounded-xl border bg-muted/50 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
@@ -634,7 +923,7 @@ export default function AIChatPage() {
             />
             <button
               onClick={() => sendMessage()}
-              disabled={!input.trim() || loading}
+              disabled={(!input.trim() && !attachedDataviz) || loading}
               className="p-2.5 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <Send className="w-4 h-4" />
@@ -689,17 +978,68 @@ export default function AIChatPage() {
             )}
           </div>
 
+          {/* AI Config panel */}
           {providerStatus && (
-            <div className="p-3 border-t text-xs flex items-center gap-2">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  providerStatus.available ? "bg-green-500" : "bg-red-500"
-                }`}
-              />
-              <span className="text-muted-foreground">
-                {providerLabel}
-                {providerStatus.available ? "" : " (indisponible)"}
-              </span>
+            <div className="p-3 border-t space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                  Config IA
+                </span>
+                <button
+                  onClick={handleReloadProvider}
+                  disabled={configLoading}
+                  className="p-1 rounded hover:bg-muted transition-colors disabled:opacity-50"
+                  title="Recharger le provider"
+                >
+                  <RefreshCw className={`w-3 h-3 ${configLoading ? "animate-spin" : ""}`} />
+                </button>
+              </div>
+              <div className="space-y-1.5 text-xs">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                      providerStatus.available ? "bg-green-500" : "bg-red-500"
+                    }`}
+                  />
+                  <span className="text-muted-foreground truncate">
+                    {providerLabel}
+                    {providerStatus.available ? "" : " (indisponible)"}
+                  </span>
+                </div>
+                {providerStatus.model_name && (
+                  <div className="text-muted-foreground pl-4 text-[11px] truncate" title={providerStatus.model_name}>
+                    Modèle : {providerStatus.model_name}
+                  </div>
+                )}
+              </div>
+              {providerStatus.providers && providerStatus.providers.length > 0 && (
+                <div className="relative" ref={providerMenuRef}>
+                  <button
+                    onClick={() => setProviderMenuOpen(!providerMenuOpen)}
+                    disabled={configLoading}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] rounded border hover:bg-muted transition-colors disabled:opacity-50"
+                  >
+                    <Settings2 className="w-3 h-3 flex-shrink-0" />
+                    <span className="truncate">Changer le provider</span>
+                  </button>
+                  {providerMenuOpen && (
+                    <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border rounded-lg shadow-lg z-50 py-1 max-h-40 overflow-y-auto">
+                      {providerStatus.providers.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => handleProviderChange(p.id)}
+                          className={`w-full flex flex-col items-start px-3 py-2 text-left hover:bg-muted transition-colors ${
+                            providerStatus.current_provider === p.id ? "bg-muted/50" : ""
+                          }`}
+                        >
+                          <span className="text-xs font-medium">{p.label}</span>
+                          <span className="text-[10px] text-muted-foreground truncate w-full">{p.model}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

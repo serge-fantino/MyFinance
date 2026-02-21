@@ -323,7 +323,8 @@ def _compile_select(query: DatavizQuery) -> tuple[Select, list[str]]:
             labeled = col_expr.label(label)
             columns.append(labeled)
             col_names.append(label)
-            group_by_cols.append(col_expr)
+            # Use the labeled column for GROUP BY so PostgreSQL gets identical expression
+            group_by_cols.append(labeled)
 
         for agg in query.aggregates:
             agg_expr = _compile_aggregate(agg, query.source)
@@ -358,9 +359,15 @@ def _compile_select(query: DatavizQuery) -> tuple[Select, list[str]]:
     if group_by_cols:
         stmt = stmt.group_by(*group_by_cols)
 
-    # ORDER BY
+    # ORDER BY — use same column from select when it's a group_by (avoids PG strictness)
     for o in query.order_by:
-        col_expr = _resolve_order_column(o.field, query, col_names)
+        col_expr = None
+        for i, cname in enumerate(col_names):
+            if cname == _col_label(o.field):
+                col_expr = columns[i]
+                break
+        if col_expr is None:
+            col_expr = _resolve_order_column(o.field, query, col_names)
         if o.dir == "asc":
             stmt = stmt.order_by(col_expr.asc())
         else:
@@ -640,8 +647,8 @@ async def execute_query(
     try:
         result = await db.execute(stmt)
     except Exception as exc:
-        # Roll back the failed statement so the session stays usable
-        await db.rollback()
+        # Note: we do NOT rollback here — it can cause MissingGreenlet with async
+        # and mask the real error. The request-scoped session will rollback at end.
         raise QueryExecutionError(
             f"Erreur SQL : {exc}",
             sql=sql_text,

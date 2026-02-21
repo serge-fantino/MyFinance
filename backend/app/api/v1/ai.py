@@ -7,14 +7,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, get_db
 from app.models.user import User
 from app.schemas.ai import (
+    AIConfigUpdate,
     ChatMessage,
     ChatResponse,
     ConversationDetailResponse,
     ConversationResponse,
     MessageResponse,
     ProviderStatusResponse,
+    QueryExecuteRequest,
 )
-from app.services.chat_service import ChatService
+from app.services.ai_config import set_provider
+from app.services.chat_service import ChatService, convert_raw_to_placeholders
+from app.services.metamodel import metamodel_prompt_json
+from app.services.query_engine import QueryContext, execute_query
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -73,19 +78,27 @@ async def get_conversation(
     conv = await service.get_conversation(conversation_id, current_user)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation non trouvée")
-    return ConversationDetailResponse(
-        id=conv.id,
-        title=conv.title,
-        messages=[
+    messages_out = []
+    for m in conv.messages:
+        content = m.content
+        meta = m.metadata_ or {}
+        charts = meta.get("charts", [])
+        # Convert old stored format (raw with ```dataviz) to placeholders if needed
+        if m.role == "assistant" and charts and "```dataviz" in content:
+            content = convert_raw_to_placeholders(content, charts)
+        messages_out.append(
             MessageResponse(
                 id=m.id,
                 role=m.role,
-                content=m.content,
-                metadata=m.metadata_,
+                content=content,
+                metadata=meta,
                 created_at=m.created_at,
             )
-            for m in conv.messages
-        ],
+        )
+    return ConversationDetailResponse(
+        id=conv.id,
+        title=conv.title,
+        messages=messages_out,
         created_at=conv.created_at,
     )
 
@@ -109,6 +122,68 @@ async def provider_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Check if the AI provider is available."""
+    """Check if the AI provider is available and return full config."""
     service = ChatService(db)
     return await service.check_provider_status()
+
+
+@router.patch("/config", response_model=ProviderStatusResponse)
+async def update_ai_config(
+    payload: AIConfigUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update AI config (e.g. provider) and return refreshed status."""
+    if payload.provider is not None:
+        set_provider(payload.provider)
+    service = ChatService(db)
+    return await service.check_provider_status()
+
+
+@router.get("/metamodel")
+async def get_metamodel(
+    current_user: User = Depends(get_current_user),
+):
+    """Return the query metamodel (sources, fields, operators) for the Query module."""
+    return metamodel_prompt_json()
+
+
+@router.post("/query")
+async def execute_dataviz_query(
+    payload: QueryExecuteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Execute a raw dataviz query and return chart data (interactive Query module)."""
+    service = ChatService(db)
+    account_ids = await service._resolve_account_scope(current_user, payload.account_ids)
+    if not account_ids:
+        raise HTTPException(status_code=400, detail="Aucun compte sélectionné")
+    context = QueryContext(user_id=current_user.id, account_ids=account_ids)
+    try:
+        data, _col_names, sql_text = await execute_query(db, payload.query, context)
+        return {
+            "viz": payload.viz,
+            "data": data,
+            "trace": {
+                "query": payload.query,
+                "viz": payload.viz,
+                "sql": sql_text,
+                "row_count": len(data),
+                "error": None,
+            },
+        }
+    except Exception as e:
+        logger.error("query_execute_error", error=str(e))
+        error_msg = str(e)
+        return {
+            "viz": payload.viz,
+            "data": [],
+            "trace": {
+                "query": payload.query,
+                "viz": payload.viz,
+                "sql": None,
+                "row_count": 0,
+                "error": error_msg,
+            },
+        }

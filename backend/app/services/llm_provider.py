@@ -11,6 +11,7 @@ import httpx
 import structlog
 
 from app.config import settings
+from app.services.ai_config import get_current_provider
 
 logger = structlog.get_logger()
 
@@ -39,6 +40,10 @@ class LLMProviderBase(ABC):
     @abstractmethod
     async def is_available(self) -> bool:
         """Check if the provider is reachable."""
+
+    def get_model_name(self) -> str:
+        """Return the configured model name for this provider."""
+        return getattr(self, "model", "?")
 
 
 class OllamaChatProvider(LLMProviderBase):
@@ -258,7 +263,7 @@ class GeminiChatProvider(LLMProviderBase):
 
 def get_llm_provider() -> LLMProviderBase:
     """Factory: return the configured LLM provider."""
-    provider = settings.ai_chat_provider
+    provider = get_current_provider()
     if provider == "openai":
         return OpenAIChatProvider()
     if provider == "anthropic":

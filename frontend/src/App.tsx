@@ -10,6 +10,7 @@ import TransactionsPage from "./pages/transactions/TransactionsPage";
 import ClassificationPage from "./pages/classification/ClassificationPage";
 import SettingsPage from "./pages/settings/SettingsPage";
 import AnalyticsPage from "./pages/analytics/AnalyticsPage";
+import QueryPage from "./pages/query/QueryPage";
 import AIChatPage from "./pages/ai-chat/AIChatPage";
 
 function App() {
@@ -48,6 +49,7 @@ function App() {
           <Route path="/classification" element={<ClassificationPage />} />
 
           <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/query" element={<QueryPage />} />
           <Route path="/ai-chat" element={<AIChatPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>

@@ -25,6 +25,8 @@ from sqlalchemy.orm import selectinload
 from app.models.account import Account
 from app.models.conversation import Conversation, Message
 from app.models.user import User
+from app.config import settings
+from app.services.ai_config import get_current_provider
 from app.services.llm_provider import get_llm_provider
 from app.services.metamodel import metamodel_prompt_text
 from app.services.query_engine import (
@@ -102,7 +104,7 @@ Il y a deux modes de requête :
     "limit": 10
   }},
   "viz": {{
-    "chart": "bar|pie|area|kpi",
+    "chart": "bar|pie|area|kpi|treemap",
     "title": "Titre du graphique",
     "encoding": {{
       "x": {{"field": "...", "type": "nominal|quantitative|temporal"}},
@@ -115,22 +117,24 @@ Il y a deux modes de requête :
 
 IMPORTANT : "fields" et "groupBy"/"aggregates" sont mutuellement exclusifs.
 - Si l'utilisateur demande une LISTE de transactions → utilise "fields" + chart "table"
-- Si l'utilisateur demande des STATISTIQUES ou un GRAPHIQUE → utilise "groupBy"/"aggregates" + chart bar/pie/area/kpi
+- Si l'utilisateur demande des STATISTIQUES ou un GRAPHIQUE → utilise "groupBy"/"aggregates" + chart bar/pie/area/kpi/treemap
 
 IMPORTANT : dans "fields", utilise la notation source ("category.name", "account.name").
 Dans "viz.columns", le champ "field" utilise le nom aplati ("category_name", "account_name") car c'est le nom de la colonne en sortie.
 
 Types de graphiques disponibles :
-- "table" : tableau de données (lignes individuelles, mode simple)
-- "bar"   : barres (x=catégories, y=valeurs)
-- "pie"   : camembert (theta=valeurs, color=catégories)
-- "area"  : courbe d'évolution (x=temps, y=valeurs)
-- "kpi"   : indicateurs clés (chaque ligne = un KPI avec label + value)
+- "table"   : tableau de données (lignes individuelles, mode simple)
+- "bar"     : barres (x=catégories, y=valeurs)
+- "pie"     : camembert (theta=valeurs, color=catégories)
+- "area"    : courbe d'évolution (x=temps, y=valeurs)
+- "kpi"     : indicateurs clés (chaque ligne = un KPI avec label + value)
+- "treemap" : treemap (weight=valeur numérique pour la taille, color=modalité pour le libellé et la couleur)
 
-Encoding channels (pour bar/pie/area/kpi) :
+Encoding channels (pour bar/pie/area/kpi/treemap) :
 - "x", "y"     : axes principaux
 - "color"      : couleur / catégorie
 - "theta"      : angle pour pie charts (valeur numérique)
+- "weight"     : poids/taille pour treemap (valeur numérique)
 - "label"      : étiquettes textuelles
 - "value"      : valeur numérique (pour KPI)
 - Chaque channel a: "field" (nom de colonne de la query), "type" (nominal|quantitative|temporal)
@@ -198,9 +202,19 @@ Recherche de transactions par libellé ce trimestre :
 {{"query": {{"source": "transactions", "filters": [{{"field": "date", "op": "period", "value": "last_12_months"}}], "groupBy": ["month(date)"], "aggregates": [{{"fn": "sum", "field": "amount", "as": "net"}}], "orderBy": [{{"field": "month", "dir": "asc"}}]}}, "viz": {{"chart": "area", "title": "Évolution du solde net", "encoding": {{"x": {{"field": "month", "type": "temporal"}}, "y": {{"field": "net", "type": "quantitative", "format": "currency"}}}}}}}}
 ```
 
+Répartition mensuelle des dépenses par catégorie (area empilé, plusieurs couleurs) :
+```dataviz
+{{"query": {{"source": "transactions", "filters": [{{"field": "direction", "op": "=", "value": "expense"}}, {{"field": "date", "op": "period", "value": "last_12_months"}}], "groupBy": ["month(date)", "category.name"], "aggregates": [{{"fn": "sum", "field": "amount", "as": "total"}}], "orderBy": [{{"field": "month", "dir": "asc"}}, {{"field": "total", "dir": "asc"}}]}}, "viz": {{"chart": "area", "title": "Répartition mensuelle des dépenses par catégorie", "encoding": {{"x": {{"field": "month", "type": "temporal"}}, "y": {{"field": "total", "type": "quantitative", "format": "currency"}}, "color": {{"field": "category_name", "type": "nominal"}}}}}}}}
+```
+
 Solde par compte :
 ```dataviz
 {{"query": {{"source": "balance"}}, "viz": {{"chart": "kpi", "title": "Soldes actuels", "encoding": {{"label": {{"field": "account_name", "type": "nominal"}}, "value": {{"field": "amount", "type": "quantitative", "format": "currency"}}}}}}}}
+```
+
+Répartition visuelle par catégorie (treemap) :
+```dataviz
+{{"query": {{"source": "transactions", "filters": [{{"field": "direction", "op": "=", "value": "expense"}}, {{"field": "date", "op": "period", "value": "current_month"}}], "groupBy": ["category.name"], "aggregates": [{{"fn": "sum", "field": "amount", "as": "total"}}], "orderBy": [{{"field": "total", "dir": "desc"}}], "limit": 15}}, "viz": {{"chart": "treemap", "title": "Répartition des dépenses", "encoding": {{"weight": {{"field": "total", "type": "quantitative", "format": "currency"}}, "color": {{"field": "category_name", "type": "nominal"}}}}}}}}
 ```
 
 N'utilise les blocs dataviz que quand c'est pertinent pour illustrer ta réponse.
@@ -234,6 +248,44 @@ def parse_dataviz_blocks(text: str) -> list[tuple[str, dict]]:
 def strip_dataviz_blocks(text: str) -> str:
     """Remove ```dataviz blocks from text, leaving surrounding prose."""
     return _DATAVIZ_RE.sub("", text).strip()
+
+
+def build_message_with_placeholders(
+    text: str,
+    blocks_with_charts: list[tuple[str, dict | None]],
+) -> str:
+    """Replace each dataviz block with {{CHART:i}} placeholder for in-place rendering.
+
+    blocks_with_charts: list of (block_text, chart_or_none) from execution.
+    """
+    result = text
+    chart_idx = 0
+    for block_text, chart in blocks_with_charts:
+        if chart:
+            result = result.replace(block_text, f"{{{{CHART:{chart_idx}}}}}", 1)
+            chart_idx += 1
+        else:
+            result = result.replace(block_text, "", 1)
+    return result.strip()
+
+
+def convert_raw_to_placeholders(content: str, charts: list) -> str:
+    """Convert stored raw content (with ```dataviz blocks) to placeholder format.
+
+    Used when loading old messages that were stored before placeholder format.
+    """
+    blocks = parse_dataviz_blocks(content)
+    if not blocks:
+        return content
+    result = content
+    chart_idx = 0
+    for block_text, _ in blocks:
+        if chart_idx < len(charts):
+            result = result.replace(block_text, f"{{{{CHART:{chart_idx}}}}}", 1)
+            chart_idx += 1
+        else:
+            result = result.replace(block_text, "", 1)
+    return result.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -333,43 +385,35 @@ class ChatService:
         dataviz_blocks = parse_dataviz_blocks(response_text)
         charts = []
         block_traces = []
+        blocks_with_charts: list[tuple[str, dict | None]] = []
 
-        for _block_text, block_data in dataviz_blocks:
+        for block_text, block_data in dataviz_blocks:
             chart, trace = await self._execute_dataviz_block(
                 block_data, context, collect_debug=debug
             )
+            blocks_with_charts.append((block_text, chart))
             if chart:
                 charts.append(chart)
             if trace:
                 block_traces.append(trace)
 
-        # Clean message text (remove dataviz blocks)
-        clean_message = strip_dataviz_blocks(response_text)
+        # Build message with {{CHART:i}} placeholders for in-place rendering
+        display_message = build_message_with_placeholders(response_text, blocks_with_charts)
 
-        # Save assistant message
-        assistant_msg = Message(
-            conversation_id=conversation.id,
-            role="assistant",
-            content=response_text,  # store original with dataviz blocks
-            metadata_={
-                "charts": charts,
-                "provider": type(self.llm).__name__,
-            },
-        )
-        self.db.add(assistant_msg)
+        # Append dataviz error hint when blocks failed (so user knows to check debug)
+        traces_with_errors = [t for t in block_traces if t.get("error")]
+        if traces_with_errors and debug:
+            err_hint = "\n\n---\n*Un ou plusieurs blocs dataviz ont échoué. Voir le panneau Debug pour la requête et le SQL.*"
+            display_message = display_message + err_hint
 
-        # Update conversation title from first message
-        if len(history) <= 1:
-            conversation.title = content[:100]
-
-        await self.db.flush()
-
+        # Build result first so we always return it even if save fails
         result = {
             "conversation_id": conversation.id,
-            "message": clean_message,
+            "message": display_message,
             "charts": charts,
             "metadata": {
                 "provider": type(self.llm).__name__,
+                "model_name": self.llm.get_model_name(),
             },
         }
 
@@ -383,6 +427,27 @@ class ChatService:
                 "llm_duration_ms": round(llm_duration_ms, 1),
             }
 
+        # Save assistant message — wrap in try/except so we always return result
+        # (session may be in bad state after dataviz query failure + rollback)
+        try:
+            assistant_msg = Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=display_message,
+            metadata_={
+                "charts": charts,
+                "provider": type(self.llm).__name__,
+                "model_name": self.llm.get_model_name(),
+            },
+            )
+            self.db.add(assistant_msg)
+            if len(history) <= 1:
+                conversation.title = content[:100]
+            await self.db.flush()
+        except Exception as save_err:
+            logger.warning("chat_save_message_failed", error=str(save_err))
+            # Still return result — user gets their response with debug traces
+
         return result
 
     async def _execute_dataviz_block(
@@ -390,8 +455,7 @@ class ChatService:
     ) -> tuple[dict | None, dict | None]:
         """Execute a single dataviz block: run query, return (chart, debug_trace).
 
-        Always returns a debug trace (even without debug flag) for error blocks,
-        so the caller can decide what to surface.
+        Always returns a trace (query, viz, sql) for chart debug view in frontend.
 
         Returns:
             (chart_dict_or_None, debug_trace_dict_or_None)
@@ -406,19 +470,17 @@ class ChatService:
             )
             duration_ms = (time.monotonic() - start) * 1000
 
-            trace = None
-            if collect_debug:
-                trace = {
-                    "query": query_spec,
-                    "viz": viz_spec,
-                    "sql": sql_text,
-                    "row_count": len(data),
-                    "data_sample": data[:5],
-                    "error": None,
-                    "duration_ms": round(duration_ms, 1),
-                }
-
-            return {"viz": viz_spec, "data": data}, trace
+            trace = {
+                "query": query_spec,
+                "viz": viz_spec,
+                "sql": sql_text,
+                "row_count": len(data),
+                "data_sample": data[:5] if collect_debug else [],
+                "error": None,
+                "duration_ms": round(duration_ms, 1),
+            }
+            chart = {"viz": viz_spec, "data": data, "trace": trace}
+            return chart, trace
 
         except QueryValidationError as e:
             logger.warning("dataviz_query_validation_error", error=str(e))
@@ -539,9 +601,20 @@ class ChatService:
 
     async def check_provider_status(self) -> dict:
         available = await self.llm.is_available()
+        model_name = self.llm.get_model_name()
+        current = get_current_provider()
+        providers = [
+            {"id": "ollama", "label": "Ollama (local)", "model": settings.llm_model},
+            {"id": "openai", "label": "OpenAI", "model": settings.openai_model},
+            {"id": "anthropic", "label": "Anthropic (Claude)", "model": settings.anthropic_model},
+            {"id": "gemini", "label": "Google Gemini", "model": settings.gemini_model},
+        ]
         return {
             "provider": type(self.llm).__name__,
             "available": available,
+            "model_name": model_name,
+            "providers": providers,
+            "current_provider": current,
         }
 
     async def _get_or_create_conversation(
