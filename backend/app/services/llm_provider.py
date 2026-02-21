@@ -1,8 +1,8 @@
 """LLM provider abstraction for AI chat.
 
-Supports Ollama (local) and OpenAI (cloud) with a unified interface.
-The provider receives a system prompt + user message and returns the
-assistant's text response.
+Supports Ollama (local), OpenAI, Anthropic (Claude), and Google Gemini
+with a unified interface. The provider receives a system prompt + message
+history and returns the assistant's text response.
 """
 
 from abc import ABC, abstractmethod
@@ -153,8 +153,116 @@ class OpenAIChatProvider(LLMProviderBase):
             return f"Erreur lors de l'appel à OpenAI : {e}"
 
 
+class AnthropicChatProvider(LLMProviderBase):
+    """Anthropic Claude provider using the messages API.
+
+    Key difference: system prompt is a top-level parameter, not a message.
+    """
+
+    def __init__(self) -> None:
+        self.api_key = settings.anthropic_api_key
+        self.model = settings.anthropic_model
+
+    async def is_available(self) -> bool:
+        return bool(self.api_key)
+
+    async def chat(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        temperature: float = 0.3,
+    ) -> str:
+        if not self.api_key:
+            return "Erreur : clé API Anthropic non configurée."
+
+        from anthropic import AsyncAnthropic
+
+        client = AsyncAnthropic(api_key=self.api_key)
+
+        # Anthropic expects messages with role "user" or "assistant" only
+        anthropic_messages = [
+            {"role": msg["role"], "content": msg["content"]}
+            for msg in messages
+            if msg["role"] in ("user", "assistant")
+        ]
+
+        try:
+            response = await client.messages.create(
+                model=self.model,
+                system=system_prompt,
+                messages=anthropic_messages,
+                temperature=temperature,
+                max_tokens=2000,
+            )
+            return response.content[0].text if response.content else ""
+        except Exception as e:
+            logger.error("anthropic_chat_error", error=str(e))
+            return f"Erreur lors de l'appel à Anthropic : {e}"
+
+
+class GeminiChatProvider(LLMProviderBase):
+    """Google Gemini provider using the google-genai SDK.
+
+    Key differences:
+    - role "assistant" → "model"
+    - system instruction is a separate parameter
+    """
+
+    def __init__(self) -> None:
+        self.api_key = settings.gemini_api_key
+        self.model = settings.gemini_model
+
+    async def is_available(self) -> bool:
+        return bool(self.api_key)
+
+    async def chat(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        temperature: float = 0.3,
+    ) -> str:
+        if not self.api_key:
+            return "Erreur : clé API Gemini non configurée."
+
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=self.api_key)
+
+        # Gemini uses "model" instead of "assistant"
+        gemini_messages = []
+        for msg in messages:
+            role = "model" if msg["role"] == "assistant" else "user"
+            gemini_messages.append(
+                types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=msg["content"])],
+                )
+            )
+
+        try:
+            response = await client.aio.models.generate_content(
+                model=self.model,
+                contents=gemini_messages,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=temperature,
+                    max_output_tokens=2000,
+                ),
+            )
+            return response.text or ""
+        except Exception as e:
+            logger.error("gemini_chat_error", error=str(e))
+            return f"Erreur lors de l'appel à Gemini : {e}"
+
+
 def get_llm_provider() -> LLMProviderBase:
     """Factory: return the configured LLM provider."""
-    if settings.ai_chat_provider == "openai":
+    provider = settings.ai_chat_provider
+    if provider == "openai":
         return OpenAIChatProvider()
+    if provider == "anthropic":
+        return AnthropicChatProvider()
+    if provider == "gemini":
+        return GeminiChatProvider()
     return OllamaChatProvider()

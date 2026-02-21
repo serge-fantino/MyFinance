@@ -22,8 +22,10 @@ pydantic>=2.5.0
 pydantic-settings>=2.1.0
 email-validator>=2.1.0
 
-# AI — OpenAI (optional, used when AI_CHAT_PROVIDER=openai)
+# AI — LLM providers (optional, install only what you need)
 openai>=1.12.0
+anthropic>=0.39.0
+google-genai>=1.0.0
 
 # Embeddings — local classification (no GPU required)
 sentence-transformers>=2.2.0
