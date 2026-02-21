@@ -39,10 +39,17 @@ interface ChannelEncoding {
   format?: "currency" | string;
 }
 
+export interface TableColumn {
+  field: string;
+  label?: string;
+  format?: "currency" | string;
+}
+
 export interface VizSpec {
-  chart: "bar" | "pie" | "area" | "kpi";
+  chart: "bar" | "pie" | "area" | "kpi" | "table";
   title?: string;
   encoding: Record<string, ChannelEncoding>;
+  columns?: TableColumn[];  // column definitions for table charts
 }
 
 export interface ChartResult {
@@ -222,6 +229,61 @@ function AreaChartBlock({ data, viz }: { data: Record<string, unknown>[]; viz: V
   );
 }
 
+function TableBlock({ data, viz }: { data: Record<string, unknown>[]; viz: VizSpec }) {
+  // Columns from viz spec, or auto-detect from data keys
+  const columns: TableColumn[] = viz.columns && viz.columns.length > 0
+    ? viz.columns
+    : Object.keys(data[0] || {}).map((k) => ({ field: k, label: k }));
+
+  return (
+    <div className="my-3 overflow-x-auto">
+      {viz.title && <div className="text-sm font-medium text-muted-foreground mb-2">{viz.title}</div>}
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr>
+            {columns.map((col, i) => (
+              <th
+                key={i}
+                className="text-left px-2 py-1.5 border-b font-medium text-muted-foreground text-xs"
+              >
+                {col.label || col.field}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row, ri) => (
+            <tr key={ri} className="border-b border-muted/50 hover:bg-muted/30">
+              {columns.map((col, ci) => {
+                const val = row[col.field];
+                const isAmount = col.format === "currency" || col.field === "amount";
+                const numVal = Number(val);
+                const isNeg = isAmount && !isNaN(numVal) && numVal < 0;
+                const isPos = isAmount && !isNaN(numVal) && numVal > 0;
+                return (
+                  <td
+                    key={ci}
+                    className={`px-2 py-1.5 text-xs ${
+                      isNeg ? "text-red-600" : isPos ? "text-emerald-600" : ""
+                    } ${isAmount ? "text-right font-medium tabular-nums" : ""}`}
+                  >
+                    {formatValue(val, col.format)}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {data.length >= 50 && (
+        <div className="text-xs text-muted-foreground mt-1 text-center">
+          {data.length} lignes affichées (limite atteinte)
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -251,6 +313,8 @@ export default function ChatChart({ chart }: { chart: ChartResult }) {
       return <PieChartBlock data={data} viz={viz} />;
     case "area":
       return <AreaChartBlock data={data} viz={viz} />;
+    case "table":
+      return <TableBlock data={data} viz={viz} />;
     default:
       return null;
   }

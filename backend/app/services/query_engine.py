@@ -76,6 +76,7 @@ class OrderByClause:
 class DatavizQuery:
     """Parsed query DSL from LLM."""
     source: str
+    fields: list[str]               # explicit field selection (simple mode)
     filters: list[FilterClause]
     group_by: list[str]
     aggregates: list[AggregateClause]
@@ -111,6 +112,12 @@ def parse_query(raw: dict) -> DatavizQuery:
         raise QueryValidationError(f"Source inconnue : {source!r}. Sources valides : {list(ALL_SOURCES)}")
 
     source_def = ALL_SOURCES[source]
+
+    # --- fields (simple query mode) ---
+    fields = []
+    for f_ref in raw.get("fields", []):
+        _validate_field_ref(f_ref, source_def)
+        fields.append(f_ref)
 
     # --- filters ---
     filters = []
@@ -155,6 +162,7 @@ def parse_query(raw: dict) -> DatavizQuery:
 
     return DatavizQuery(
         source=source,
+        fields=fields,
         filters=filters,
         group_by=group_by,
         aggregates=aggregates,
@@ -298,24 +306,29 @@ def _compile_select(query: DatavizQuery) -> tuple[Select, list[str]]:
     col_names = []
     group_by_cols = []
 
-    # GROUP BY columns first
-    for g in query.group_by:
-        col_expr = _resolve_select_column(g, query.source)
-        label = _col_label(g)
-        labeled = col_expr.label(label)
-        columns.append(labeled)
-        col_names.append(label)
-        group_by_cols.append(col_expr)
+    if query.fields and not query.group_by and not query.aggregates:
+        # ---- SIMPLE MODE: explicit field selection, no aggregation ----
+        for f_ref in query.fields:
+            col_expr = _resolve_select_column(f_ref, query.source)
+            label = _col_label(f_ref)
+            columns.append(col_expr.label(label))
+            col_names.append(label)
+    elif query.group_by or query.aggregates:
+        # ---- AGGREGATE MODE: group_by + aggregates ----
+        for g in query.group_by:
+            col_expr = _resolve_select_column(g, query.source)
+            label = _col_label(g)
+            labeled = col_expr.label(label)
+            columns.append(labeled)
+            col_names.append(label)
+            group_by_cols.append(col_expr)
 
-    # Aggregate columns
-    for agg in query.aggregates:
-        agg_expr = _compile_aggregate(agg, query.source)
-        columns.append(agg_expr.label(agg.alias))
-        col_names.append(agg.alias)
-
-    # If no group_by and no aggregates, select raw fields
-    if not query.group_by and not query.aggregates:
-        # Select useful default columns
+        for agg in query.aggregates:
+            agg_expr = _compile_aggregate(agg, query.source)
+            columns.append(agg_expr.label(agg.alias))
+            col_names.append(agg.alias)
+    else:
+        # ---- DEFAULT FALLBACK: no fields, no groupBy, no aggregates ----
         defaults = _default_columns(query.source)
         for label, col in defaults:
             columns.append(col.label(label))
@@ -454,6 +467,10 @@ def _resolve_order_column(ref: str, query: DatavizQuery, col_names: list[str]):
     for g in query.group_by:
         if _col_label(g) == ref:
             return _resolve_select_column(g, query.source)
+    # Check fields labels (simple mode — e.g. "category_name" → "category.name")
+    for f_ref in query.fields:
+        if _col_label(f_ref) == ref:
+            return _resolve_select_column(f_ref, query.source)
     # Fall back to column
     return _resolve_select_column(ref, query.source)
 
@@ -471,10 +488,15 @@ def _col_label(ref: str) -> str:
 def _needs_relation(query: DatavizQuery, relation: str) -> bool:
     """Check if query references a relation."""
     refs = []
+    refs.extend(query.fields)
     refs.extend(f.field for f in query.filters)
     refs.extend(query.group_by)
     refs.extend(a.field for a in query.aggregates if a.field)
     refs.extend(o.field for o in query.order_by)
+    # Default fallback columns include category.name
+    if not query.fields and not query.group_by and not query.aggregates:
+        if relation == "category":
+            return True
     return any(r.startswith(f"{relation}.") for r in refs)
 
 

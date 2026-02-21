@@ -60,7 +60,37 @@ Chaque bloc contient un JSON avec deux parties :
 
 Le backend exécute la query et fournit les données au frontend. Tu ne manipules JAMAIS les données directement.
 
-Format d'un bloc dataviz :
+=== MODES DE REQUÊTE ===
+
+Il y a deux modes de requête :
+
+1. MODE SIMPLE (liste de transactions) :
+   Utilise "fields" pour sélectionner les colonnes. Pas de groupBy ni aggregates.
+   Renvoie les transactions individuelles (lignes brutes).
+```dataviz
+{{
+  "query": {{
+    "source": "transactions",
+    "fields": ["date", "label", "amount", "category.name"],
+    "filters": [...],
+    "orderBy": [{{"field": "date", "dir": "desc"}}],
+    "limit": 20
+  }},
+  "viz": {{
+    "chart": "table",
+    "title": "Titre du tableau",
+    "columns": [
+      {{"field": "date", "label": "Date"}},
+      {{"field": "label", "label": "Libellé"}},
+      {{"field": "amount", "label": "Montant", "format": "currency"}},
+      {{"field": "category_name", "label": "Catégorie"}}
+    ]
+  }}
+}}
+```
+
+2. MODE AGRÉGATION (statistiques, graphiques) :
+   Utilise "groupBy" et "aggregates". Pas de "fields".
 ```dataviz
 {{
   "query": {{
@@ -83,13 +113,21 @@ Format d'un bloc dataviz :
 }}
 ```
 
-Types de graphiques disponibles :
-- "bar"  : barres (x=catégories, y=valeurs)
-- "pie"  : camembert (theta=valeurs, color=catégories)
-- "area" : courbe d'évolution (x=temps, y=valeurs)
-- "kpi"  : indicateurs clés (chaque ligne = un KPI avec label + value)
+IMPORTANT : "fields" et "groupBy"/"aggregates" sont mutuellement exclusifs.
+- Si l'utilisateur demande une LISTE de transactions → utilise "fields" + chart "table"
+- Si l'utilisateur demande des STATISTIQUES ou un GRAPHIQUE → utilise "groupBy"/"aggregates" + chart bar/pie/area/kpi
 
-Encoding channels :
+IMPORTANT : dans "fields", utilise la notation source ("category.name", "account.name").
+Dans "viz.columns", le champ "field" utilise le nom aplati ("category_name", "account_name") car c'est le nom de la colonne en sortie.
+
+Types de graphiques disponibles :
+- "table" : tableau de données (lignes individuelles, mode simple)
+- "bar"   : barres (x=catégories, y=valeurs)
+- "pie"   : camembert (theta=valeurs, color=catégories)
+- "area"  : courbe d'évolution (x=temps, y=valeurs)
+- "kpi"   : indicateurs clés (chaque ligne = un KPI avec label + value)
+
+Encoding channels (pour bar/pie/area/kpi) :
 - "x", "y"     : axes principaux
 - "color"      : couleur / catégorie
 - "theta"      : angle pour pie charts (valeur numérique)
@@ -97,6 +135,10 @@ Encoding channels :
 - "value"      : valeur numérique (pour KPI)
 - Chaque channel a: "field" (nom de colonne de la query), "type" (nominal|quantitative|temporal)
 - Option "format": "currency" pour formater en euros
+
+Table columns (pour chart "table") :
+- "columns": liste de {{"field": "...", "label": "...", "format": "currency|..."}}
+- "field" = nom de colonne en sortie (aplati: "category_name" au lieu de "category.name")
 
 === SCHEMA DES DONNÉES (metamodel) ===
 
@@ -108,9 +150,19 @@ Encoding channels :
 
 === EXEMPLES ===
 
+Dernières transactions :
+```dataviz
+{{"query": {{"source": "transactions", "fields": ["date", "label", "amount", "category.name", "account.name"], "orderBy": [{{"field": "date", "dir": "desc"}}], "limit": 20}}, "viz": {{"chart": "table", "title": "Dernières opérations", "columns": [{{"field": "date", "label": "Date"}}, {{"field": "label", "label": "Libellé"}}, {{"field": "amount", "label": "Montant", "format": "currency"}}, {{"field": "category_name", "label": "Catégorie"}}, {{"field": "account_name", "label": "Compte"}}]}}}}
+```
+
 Dépenses par catégorie ce mois :
 ```dataviz
 {{"query": {{"source": "transactions", "filters": [{{"field": "direction", "op": "=", "value": "expense"}}, {{"field": "date", "op": ">=", "value": "{example_date}"}}], "groupBy": ["category.name"], "aggregates": [{{"fn": "sum", "field": "amount", "as": "total"}}, {{"fn": "count", "as": "nb"}}], "orderBy": [{{"field": "total", "dir": "asc"}}], "limit": 10}}, "viz": {{"chart": "bar", "title": "Top dépenses par catégorie", "encoding": {{"x": {{"field": "category_name", "type": "nominal"}}, "y": {{"field": "total", "type": "quantitative", "format": "currency"}}}}}}}}
+```
+
+Recherche de transactions par libellé :
+```dataviz
+{{"query": {{"source": "transactions", "fields": ["date", "label", "amount", "category.name"], "filters": [{{"field": "label", "op": "like", "value": "amazon"}}], "orderBy": [{{"field": "date", "dir": "desc"}}], "limit": 20}}, "viz": {{"chart": "table", "title": "Transactions Amazon", "columns": [{{"field": "date", "label": "Date"}}, {{"field": "label", "label": "Libellé"}}, {{"field": "amount", "label": "Montant", "format": "currency"}}, {{"field": "category_name", "label": "Catégorie"}}]}}}}
 ```
 
 Évolution du cashflow mensuel :
