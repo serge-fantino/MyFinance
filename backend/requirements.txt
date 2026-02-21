@@ -22,10 +22,8 @@ pydantic>=2.5.0
 pydantic-settings>=2.1.0
 email-validator>=2.1.0
 
-# AI — OpenAI (disabled, kept for future hybrid use)
-# openai>=1.12.0
-# langchain>=0.1.0
-# langchain-openai>=0.0.5
+# AI — OpenAI (optional, used when AI_CHAT_PROVIDER=openai)
+openai>=1.12.0
 
 # Embeddings — local classification (no GPU required)
 sentence-transformers>=2.2.0

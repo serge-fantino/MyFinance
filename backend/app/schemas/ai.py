@@ -29,6 +29,7 @@ class MessageResponse(BaseModel):
     id: int
     role: str
     content: str
+    metadata: dict | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -39,3 +40,8 @@ class ConversationDetailResponse(BaseModel):
     title: str
     messages: list[MessageResponse]
     created_at: datetime
+
+
+class ProviderStatusResponse(BaseModel):
+    provider: str
+    available: bool
