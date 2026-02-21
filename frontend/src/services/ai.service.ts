@@ -1,26 +1,27 @@
 /**
  * AI Chat API service.
+ *
+ * v2: supports dataviz query engine — charts come as {viz, data} pairs
+ * from the backend, with data queried by the query engine (not the LLM).
  */
 import api from "./api";
+import type { ChartResult, VizSpec } from "../components/chat/ChatChart";
+
+export type { ChartResult, VizSpec };
 
 export interface ChatMessage {
   content: string;
   conversation_id?: number;
+  account_ids?: number[];  // scope ceiling from UI
 }
 
 export interface ChatResponse {
   conversation_id: number;
   message: string;
+  charts: ChartResult[];
   metadata?: {
-    charts?: Record<string, ChartData>;
     provider?: string;
   };
-}
-
-export interface ChartData {
-  type: "bar" | "pie" | "area" | "kpi";
-  title: string;
-  data: Record<string, unknown>[];
 }
 
 export interface MessageItem {

@@ -1,10 +1,10 @@
 /**
  * AI Chat Page — conversational financial assistant.
  *
- * Features:
- * - Conversation list sidebar
- * - Real-time chat with markdown + inline chart rendering
- * - Provider status indicator
+ * v2: dataviz query engine architecture
+ *   - Charts come as {viz, data} from the backend (not parsed from markdown)
+ *   - Account selector sends account_ids scope with each message
+ *   - LLM never sees raw data — integrity guaranteed
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -18,14 +18,20 @@ import {
   AlertCircle,
   ChevronLeft,
   Sparkles,
+  Wallet,
+  Check,
 } from "lucide-react";
 import { aiService, Conversation, ConversationDetail, ChatResponse } from "../../services/ai.service";
-import ChatChart, { parseChartBlocks } from "../../components/chat/ChatChart";
+import { accountService } from "../../services/account.service";
+import type { Account } from "../../types/account.types";
+import ChatChart from "../../components/chat/ChatChart";
+import type { ChartResult } from "../../components/chat/ChatChart";
 
 interface DisplayMessage {
   id?: number;
   role: "user" | "assistant";
   content: string;
+  charts?: ChartResult[];
   metadata?: Record<string, unknown>;
   created_at?: string;
 }
@@ -33,27 +39,19 @@ interface DisplayMessage {
 // Simple markdown renderer (bold, italic, headers, lists, code)
 function renderMarkdown(text: string): string {
   return text
-    // Code blocks (non-chart)
     .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre class="bg-muted rounded p-2 my-1 text-xs overflow-x-auto"><code>$2</code></pre>')
-    // Inline code
     .replace(/`([^`]+)`/g, '<code class="bg-muted px-1 rounded text-sm">$1</code>')
-    // Headers
     .replace(/^### (.+)$/gm, '<h4 class="font-semibold text-sm mt-3 mb-1">$1</h4>')
     .replace(/^## (.+)$/gm, '<h3 class="font-semibold mt-3 mb-1">$1</h3>')
     .replace(/^# (.+)$/gm, '<h2 class="font-bold text-lg mt-3 mb-1">$1</h2>')
-    // Bold
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    // Italic
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    // Unordered lists
-    .replace(/^[-•] (.+)$/gm, '<li class="ml-4 list-disc">$1</li>')
-    // Line breaks
+    .replace(/^[-\u2022] (.+)$/gm, '<li class="ml-4 list-disc">$1</li>')
     .replace(/\n/g, "<br />");
 }
 
 function MessageBubble({ msg }: { msg: DisplayMessage }) {
   const isUser = msg.role === "user";
-  const segments = isUser ? [{ type: "text" as const, content: msg.content }] : parseChartBlocks(msg.content);
 
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
@@ -72,17 +70,17 @@ function MessageBubble({ msg }: { msg: DisplayMessage }) {
               : "bg-muted rounded-tl-sm"
           }`}
         >
-          {segments.map((seg, i) =>
-            seg.type === "chart" ? (
-              <ChatChart key={i} chart={seg.chart} />
-            ) : (
-              <div
-                key={i}
-                className="prose prose-sm max-w-none dark:prose-invert"
-                dangerouslySetInnerHTML={{ __html: renderMarkdown(seg.content) }}
-              />
-            )
+          {/* Text content */}
+          {msg.content && (
+            <div
+              className="prose prose-sm max-w-none dark:prose-invert"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
+            />
           )}
+          {/* Charts from query engine */}
+          {msg.charts && msg.charts.map((chart, i) => (
+            <ChatChart key={i} chart={chart} />
+          ))}
         </div>
         {msg.created_at && (
           <div className="text-[10px] text-muted-foreground mt-1 px-1">
@@ -99,9 +97,9 @@ function MessageBubble({ msg }: { msg: DisplayMessage }) {
 
 const SUGGESTION_PROMPTS = [
   "Quel est mon solde actuel sur tous mes comptes ?",
-  "Quelle est la répartition de mes dépenses ce mois-ci ?",
-  "Comment a évolué mon cashflow ces 3 derniers mois ?",
-  "Quelles sont mes plus grosses dépenses du mois ?",
+  "Quelle est la r\u00e9partition de mes d\u00e9penses ce mois-ci ?",
+  "Comment a \u00e9volu\u00e9 mon cashflow ces 3 derniers mois ?",
+  "Quelles sont mes plus grosses d\u00e9penses du mois ?",
 ];
 
 export default function AIChatPage() {
@@ -113,16 +111,23 @@ export default function AIChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [providerStatus, setProviderStatus] = useState<{ provider: string; available: boolean } | null>(null);
 
+  // Account scope
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
 
-  // Load conversations and provider status on mount
+  // Load on mount
   useEffect(() => {
     loadConversations();
     loadProviderStatus();
+    loadAccounts();
   }, []);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -135,12 +140,34 @@ export default function AIChatPage() {
     }
   }, [input]);
 
+  // Close account menu on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (accountMenuRef.current && !accountMenuRef.current.contains(e.target as Node)) {
+        setAccountMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  async function loadAccounts() {
+    try {
+      const data = await accountService.list();
+      setAccounts(data);
+      // Default: all accounts selected
+      setSelectedAccountIds(data.map((a) => a.id));
+    } catch {
+      // silently fail
+    }
+  }
+
   async function loadConversations() {
     try {
       const data = await aiService.listConversations();
       setConversations(data);
     } catch {
-      // silently fail — conversations list is not critical
+      // silently fail
     }
   }
 
@@ -164,12 +191,13 @@ export default function AIChatPage() {
             id: m.id,
             role: m.role as "user" | "assistant",
             content: m.content,
-            metadata: m.metadata,
+            // Charts from metadata if available (stored in DB)
+            charts: (m.metadata as Record<string, unknown>)?.charts as ChartResult[] | undefined,
             created_at: m.created_at,
           }))
       );
     } catch {
-      // Failed to load conversation
+      // Failed to load
     }
   }
 
@@ -193,6 +221,22 @@ export default function AIChatPage() {
     }
   }
 
+  function toggleAccount(accountId: number) {
+    setSelectedAccountIds((prev) =>
+      prev.includes(accountId)
+        ? prev.filter((id) => id !== accountId)
+        : [...prev, accountId]
+    );
+  }
+
+  function toggleAllAccounts() {
+    if (selectedAccountIds.length === accounts.length) {
+      setSelectedAccountIds([]);
+    } else {
+      setSelectedAccountIds(accounts.map((a) => a.id));
+    }
+  }
+
   const sendMessage = useCallback(
     async (text?: string) => {
       const content = (text || input).trim();
@@ -211,9 +255,11 @@ export default function AIChatPage() {
         const response: ChatResponse = await aiService.chat({
           content,
           conversation_id: activeConversation || undefined,
+          account_ids: selectedAccountIds.length < accounts.length
+            ? selectedAccountIds
+            : undefined, // undefined = all accounts (default)
         });
 
-        // Update active conversation
         if (!activeConversation) {
           setActiveConversation(response.conversation_id);
         }
@@ -221,12 +267,11 @@ export default function AIChatPage() {
         const assistantMsg: DisplayMessage = {
           role: "assistant",
           content: response.message,
+          charts: response.charts,
           metadata: response.metadata,
           created_at: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, assistantMsg]);
-
-        // Refresh conversations list
         loadConversations();
       } catch (err: unknown) {
         const errorMessage =
@@ -235,7 +280,7 @@ export default function AIChatPage() {
           ...prev,
           {
             role: "assistant",
-            content: `Désolé, une erreur s'est produite : ${errorMessage}`,
+            content: `D\u00e9sol\u00e9, une erreur s'est produite : ${errorMessage}`,
             created_at: new Date().toISOString(),
           },
         ]);
@@ -243,7 +288,7 @@ export default function AIChatPage() {
         setLoading(false);
       }
     },
-    [input, loading, activeConversation]
+    [input, loading, activeConversation, selectedAccountIds, accounts.length]
   );
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -260,9 +305,16 @@ export default function AIChatPage() {
       ? "OpenAI"
       : "IA";
 
+  const accountScopeLabel =
+    selectedAccountIds.length === 0
+      ? "Aucun compte"
+      : selectedAccountIds.length === accounts.length
+      ? "Tous les comptes"
+      : `${selectedAccountIds.length} compte${selectedAccountIds.length > 1 ? "s" : ""}`;
+
   return (
     <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
-      {/* Sidebar — conversations */}
+      {/* Sidebar */}
       <div
         className={`${
           sidebarOpen ? "w-64" : "w-0"
@@ -305,7 +357,6 @@ export default function AIChatPage() {
             )}
           </div>
 
-          {/* Provider status */}
           {providerStatus && (
             <div className="p-3 border-t text-xs flex items-center gap-2">
               <span
@@ -324,7 +375,7 @@ export default function AIChatPage() {
 
       {/* Main chat area */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Chat header */}
+        {/* Header */}
         <div className="flex items-center gap-2 px-4 py-2 border-b bg-background">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -336,10 +387,57 @@ export default function AIChatPage() {
           </button>
           <Sparkles className="w-4 h-4 text-blue-500" />
           <span className="font-medium text-sm">Assistant IA</span>
+
+          {/* Account scope selector */}
+          <div className="relative ml-auto" ref={accountMenuRef}>
+            <button
+              onClick={() => setAccountMenuOpen(!accountMenuOpen)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border hover:bg-muted transition-colors"
+            >
+              <Wallet className="w-3.5 h-3.5" />
+              <span>{accountScopeLabel}</span>
+            </button>
+            {accountMenuOpen && accounts.length > 0 && (
+              <div className="absolute right-0 top-full mt-1 w-56 bg-background border rounded-lg shadow-lg z-50 py-1">
+                <button
+                  onClick={toggleAllAccounts}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted transition-colors"
+                >
+                  <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center ${
+                    selectedAccountIds.length === accounts.length ? "bg-primary border-primary" : ""
+                  }`}>
+                    {selectedAccountIds.length === accounts.length && (
+                      <Check className="w-2.5 h-2.5 text-primary-foreground" />
+                    )}
+                  </span>
+                  <span className="font-medium">Tous les comptes</span>
+                </button>
+                <div className="border-t my-1" />
+                {accounts.map((acc) => (
+                  <button
+                    key={acc.id}
+                    onClick={() => toggleAccount(acc.id)}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted transition-colors"
+                  >
+                    <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center ${
+                      selectedAccountIds.includes(acc.id) ? "bg-primary border-primary" : ""
+                    }`}>
+                      {selectedAccountIds.includes(acc.id) && (
+                        <Check className="w-2.5 h-2.5 text-primary-foreground" />
+                      )}
+                    </span>
+                    <span className="truncate">{acc.name}</span>
+                    <span className="text-muted-foreground ml-auto">{acc.type}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           {loading && (
-            <div className="flex items-center gap-1 text-xs text-muted-foreground ml-auto">
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <Loader2 className="w-3 h-3 animate-spin" />
-              Réflexion...
+              R\u00e9flexion...
             </div>
           )}
         </div>
@@ -354,7 +452,7 @@ export default function AIChatPage() {
               <h3 className="font-semibold text-lg mb-1">Assistant Financier IA</h3>
               <p className="text-sm text-muted-foreground max-w-md mb-6">
                 Posez-moi des questions sur vos finances. J'analyse vos transactions,
-                catégories et cashflow pour vous donner des insights personnalisés.
+                cat\u00e9gories et cashflow pour vous donner des insights personnalis\u00e9s.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-lg">
                 {SUGGESTION_PROMPTS.map((prompt, i) => (
@@ -393,7 +491,7 @@ export default function AIChatPage() {
         {providerStatus && !providerStatus.available && (
           <div className="mx-4 mb-2 flex items-center gap-2 text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
             <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-            Le provider {providerLabel} n'est pas disponible. Vérifiez la configuration.
+            Le provider {providerLabel} n'est pas disponible. V\u00e9rifiez la configuration.
           </div>
         )}
 
@@ -419,7 +517,7 @@ export default function AIChatPage() {
             </button>
           </div>
           <div className="text-center text-[10px] text-muted-foreground mt-1.5">
-            L'IA analyse vos données financières réelles. Les réponses sont indicatives.
+            L'IA analyse vos donn\u00e9es financi\u00e8res r\u00e9elles. Les r\u00e9ponses sont indicatives.
           </div>
         </div>
       </div>

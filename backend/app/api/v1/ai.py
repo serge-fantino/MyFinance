@@ -30,6 +30,7 @@ async def chat(
         user=current_user,
         content=message.content,
         conversation_id=message.conversation_id,
+        account_ids=message.account_ids,
     )
     return ChatResponse(**result)
 

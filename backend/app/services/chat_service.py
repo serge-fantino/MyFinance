@@ -1,24 +1,45 @@
 """Chat service — orchestrates AI conversations.
 
-Manages conversation persistence, financial context injection,
-and LLM interaction for the AI assistant.
+Architecture (v2 — dataviz query engine):
+  1. User sends a message + account_ids (UI scope)
+  2. The LLM receives:
+     - a system prompt describing the metamodel schema
+     - the user's account list (names/types, not IDs)
+     - the conversation history
+  3. The LLM responds with free text + optional ```dataviz blocks
+     containing {query, viz} JSON
+  4. The chat service parses dataviz blocks, executes queries via the
+     query engine, and returns {message, charts: [{viz, data}, ...]}
+  5. Data never transits through the LLM — integrity is guaranteed
 """
 
 import json
+import re
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.models.account import Account
 from app.models.conversation import Conversation, Message
 from app.models.user import User
-from app.services.financial_context import FinancialContextBuilder
 from app.services.llm_provider import get_llm_provider
+from app.services.metamodel import metamodel_prompt_text
+from app.services.query_engine import (
+    QueryContext,
+    QueryValidationError,
+    execute_query,
+)
 
 logger = structlog.get_logger()
 
-SYSTEM_PROMPT = """Tu es un assistant financier personnel intelligent. Tu aides l'utilisateur à comprendre ses finances personnelles.
+# ---------------------------------------------------------------------------
+# System prompt — describes capabilities + metamodel schema
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT_TEMPLATE = """\
+Tu es un assistant financier personnel intelligent. Tu aides l'utilisateur à comprendre ses finances personnelles.
 
 Règles :
 - Réponds toujours en français.
@@ -26,47 +47,122 @@ Règles :
 - Quand tu analyses des données financières, donne des observations utiles et des tendances.
 - Si tu identifies des anomalies ou des points d'attention, signale-les.
 - Utilise le format markdown pour structurer ta réponse (titres, listes, gras).
-- Quand des données chiffrées sont fournies, base-toi UNIQUEMENT sur ces données. Ne les invente pas.
 - Si tu n'as pas assez de données pour répondre, dis-le clairement.
 
-Capacités de visualisation :
-- Tu peux inclure des visualisations dans ta réponse en utilisant des blocs de code spéciaux.
-- Pour insérer un graphique, utilise un bloc ```chart suivi d'un JSON décrivant le graphique.
-- Types disponibles : "bar", "pie", "area", "kpi"
-- Le frontend les rendra automatiquement.
+=== VISUALISATIONS ===
 
-Exemples de blocs chart :
+Tu peux inclure des visualisations dans ta réponse via des blocs ```dataviz.
+Chaque bloc contient un JSON avec deux parties :
+  - "query" : une requête déclarative sur les données financières
+  - "viz"   : la spécification de visualisation (type de graphique + mapping des channels)
 
-Pour un graphique en barres :
-```chart
-{"type": "bar", "title": "Revenus vs Dépenses", "data": [{"label": "Jan", "revenus": 3000, "depenses": 2500}, {"label": "Fév", "revenus": 3200, "depenses": 2800}]}
+Le backend exécute la query et fournit les données au frontend. Tu ne manipules JAMAIS les données directement.
+
+Format d'un bloc dataviz :
+```dataviz
+{{
+  "query": {{
+    "source": "transactions",
+    "filters": [{{"field": "...", "op": "...", "value": "..."}}],
+    "groupBy": ["..."],
+    "aggregates": [{{"fn": "sum", "field": "amount", "as": "total"}}],
+    "orderBy": [{{"field": "total", "dir": "desc"}}],
+    "limit": 10
+  }},
+  "viz": {{
+    "chart": "bar|pie|area|kpi",
+    "title": "Titre du graphique",
+    "encoding": {{
+      "x": {{"field": "...", "type": "nominal|quantitative|temporal"}},
+      "y": {{"field": "...", "type": "quantitative", "format": "currency"}},
+      "color": {{"field": "...", "type": "nominal"}}
+    }}
+  }}
+}}
 ```
 
-Pour un camembert :
-```chart
-{"type": "pie", "title": "Répartition", "data": [{"name": "Alimentation", "value": 450}, {"name": "Transport", "value": 200}]}
+Types de graphiques disponibles :
+- "bar"  : barres (x=catégories, y=valeurs)
+- "pie"  : camembert (theta=valeurs, color=catégories)
+- "area" : courbe d'évolution (x=temps, y=valeurs)
+- "kpi"  : indicateurs clés (chaque ligne = un KPI avec label + value)
+
+Encoding channels :
+- "x", "y"     : axes principaux
+- "color"      : couleur / catégorie
+- "theta"      : angle pour pie charts (valeur numérique)
+- "label"      : étiquettes textuelles
+- "value"      : valeur numérique (pour KPI)
+- Chaque channel a: "field" (nom de colonne de la query), "type" (nominal|quantitative|temporal)
+- Option "format": "currency" pour formater en euros
+
+=== SCHEMA DES DONNÉES (metamodel) ===
+
+{metamodel_schema}
+
+=== COMPTES DE L'UTILISATEUR ===
+
+{accounts_context}
+
+=== EXEMPLES ===
+
+Dépenses par catégorie ce mois :
+```dataviz
+{{"query": {{"source": "transactions", "filters": [{{"field": "direction", "op": "=", "value": "expense"}}, {{"field": "date", "op": ">=", "value": "{example_date}"}}], "groupBy": ["category.name"], "aggregates": [{{"fn": "sum", "field": "amount", "as": "total"}}, {{"fn": "count", "as": "nb"}}], "orderBy": [{{"field": "total", "dir": "asc"}}], "limit": 10}}, "viz": {{"chart": "bar", "title": "Top dépenses par catégorie", "encoding": {{"x": {{"field": "category_name", "type": "nominal"}}, "y": {{"field": "total", "type": "quantitative", "format": "currency"}}}}}}}}
 ```
 
-Pour des KPI :
-```chart
-{"type": "kpi", "title": "Résumé", "data": [{"label": "Solde", "value": 15000}, {"label": "Revenus", "value": 3500}, {"label": "Dépenses", "value": 2800}]}
+Évolution du cashflow mensuel :
+```dataviz
+{{"query": {{"source": "transactions", "groupBy": ["month(date)"], "aggregates": [{{"fn": "sum", "field": "amount", "as": "net"}}], "orderBy": [{{"field": "month", "dir": "asc"}}]}}, "viz": {{"chart": "area", "title": "Évolution du solde net", "encoding": {{"x": {{"field": "month", "type": "temporal"}}, "y": {{"field": "net", "type": "quantitative", "format": "currency"}}}}}}}}
 ```
 
-Pour une courbe d'évolution :
-```chart
-{"type": "area", "title": "Évolution du solde", "data": [{"date": "2025-01", "value": 14000}, {"date": "2025-02", "value": 14500}]}
+Solde par compte :
+```dataviz
+{{"query": {{"source": "balance"}}, "viz": {{"chart": "kpi", "title": "Soldes actuels", "encoding": {{"label": {{"field": "account_name", "type": "nominal"}}, "value": {{"field": "amount", "type": "quantitative", "format": "currency"}}}}}}}}
 ```
 
-N'utilise les blocs chart que quand c'est pertinent pour illustrer ta réponse.
+N'utilise les blocs dataviz que quand c'est pertinent pour illustrer ta réponse.
 """
 
 
+# ---------------------------------------------------------------------------
+# Dataviz block parser
+# ---------------------------------------------------------------------------
+
+_DATAVIZ_RE = re.compile(r"```dataviz\s*\n?([\s\S]*?)```", re.MULTILINE)
+
+
+def parse_dataviz_blocks(text: str) -> list[tuple[str, dict]]:
+    """Extract ```dataviz blocks from LLM response.
+
+    Returns list of (matched_text, parsed_json) tuples.
+    """
+    blocks = []
+    for match in _DATAVIZ_RE.finditer(text):
+        raw = match.group(1).strip()
+        try:
+            parsed = json.loads(raw)
+            if "query" in parsed and "viz" in parsed:
+                blocks.append((match.group(0), parsed))
+        except json.JSONDecodeError:
+            logger.warning("dataviz_block_parse_error", raw=raw[:200])
+    return blocks
+
+
+def strip_dataviz_blocks(text: str) -> str:
+    """Remove ```dataviz blocks from text, leaving surrounding prose."""
+    return _DATAVIZ_RE.sub("", text).strip()
+
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+
 class ChatService:
-    """Orchestrates AI chat conversations."""
+    """Orchestrates AI chat conversations with dataviz query engine."""
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.context_builder = FinancialContextBuilder(db)
         self.llm = get_llm_provider()
 
     async def chat(
@@ -74,16 +170,28 @@ class ChatService:
         user: User,
         content: str,
         conversation_id: int | None = None,
+        account_ids: list[int] | None = None,
     ) -> dict:
         """Process a chat message and return the AI response.
+
+        Args:
+            user: Current authenticated user.
+            content: User message text.
+            conversation_id: Existing conversation to continue, or None for new.
+            account_ids: Account IDs selected in the UI (scope ceiling).
 
         Returns:
             {
                 "conversation_id": int,
-                "message": str,
-                "metadata": {"intents": [...], "charts": {...}, "provider": str}
+                "message": str,          # LLM text with dataviz blocks removed
+                "charts": [...],         # list of {viz, data} dicts
+                "metadata": {...}
             }
         """
+        # Resolve account scope
+        scope_account_ids = await self._resolve_account_scope(user, account_ids)
+        context = QueryContext(user_id=user.id, account_ids=scope_account_ids)
+
         # Get or create conversation
         conversation = await self._get_or_create_conversation(user, conversation_id)
 
@@ -96,31 +204,37 @@ class ChatService:
         self.db.add(user_msg)
         await self.db.flush()
 
-        # Build financial context from user question
-        financial_context, chart_suggestions = await self.context_builder.build_context(
-            user, content
-        )
+        # Build system prompt with metamodel + account context
+        system_prompt = await self._build_system_prompt(user, scope_account_ids)
 
-        # Build message history (last N messages for context)
+        # Build message history
         history = await self._get_message_history(conversation.id, limit=10)
-
-        # Build the full prompt with financial context
-        enriched_system = SYSTEM_PROMPT + f"\n\n=== DONNÉES FINANCIÈRES DE L'UTILISATEUR ===\n{financial_context}"
 
         # Call LLM
         response_text = await self.llm.chat(
-            system_prompt=enriched_system,
+            system_prompt=system_prompt,
             messages=history,
             temperature=0.3,
         )
+
+        # Parse dataviz blocks and execute queries
+        dataviz_blocks = parse_dataviz_blocks(response_text)
+        charts = []
+        for _block_text, block_data in dataviz_blocks:
+            chart = await self._execute_dataviz_block(block_data, context)
+            if chart:
+                charts.append(chart)
+
+        # Clean message text (remove dataviz blocks)
+        clean_message = strip_dataviz_blocks(response_text)
 
         # Save assistant message
         assistant_msg = Message(
             conversation_id=conversation.id,
             role="assistant",
-            content=response_text,
+            content=response_text,  # store original with dataviz blocks
             metadata_={
-                "charts": chart_suggestions,
+                "charts": charts,
                 "provider": type(self.llm).__name__,
             },
         )
@@ -134,15 +248,83 @@ class ChatService:
 
         return {
             "conversation_id": conversation.id,
-            "message": response_text,
+            "message": clean_message,
+            "charts": charts,
             "metadata": {
-                "charts": chart_suggestions,
                 "provider": type(self.llm).__name__,
             },
         }
 
+    async def _execute_dataviz_block(
+        self, block: dict, context: QueryContext
+    ) -> dict | None:
+        """Execute a single dataviz block: run query, return {viz, data}."""
+        query_spec = block.get("query", {})
+        viz_spec = block.get("viz", {})
+
+        try:
+            data, _col_names = await execute_query(self.db, query_spec, context)
+            return {
+                "viz": viz_spec,
+                "data": data,
+            }
+        except QueryValidationError as e:
+            logger.warning("dataviz_query_validation_error", error=str(e))
+            return None
+        except Exception as e:
+            logger.error("dataviz_query_execution_error", error=str(e))
+            return None
+
+    async def _resolve_account_scope(
+        self, user: User, account_ids: list[int] | None
+    ) -> list[int]:
+        """Resolve the account scope ceiling.
+
+        If account_ids provided, intersect with user's actual accounts.
+        If None, use all user accounts.
+        """
+        result = await self.db.execute(
+            select(Account.id).where(
+                Account.user_id == user.id,
+                Account.status == "active",
+            )
+        )
+        all_user_accounts = [r for r in result.scalars().all()]
+
+        if account_ids:
+            return [aid for aid in account_ids if aid in all_user_accounts]
+
+        return all_user_accounts
+
+    async def _build_system_prompt(
+        self, user: User, account_ids: list[int]
+    ) -> str:
+        """Build the system prompt with metamodel schema and account context."""
+        result = await self.db.execute(
+            select(Account).where(Account.id.in_(account_ids))
+        )
+        accounts = result.scalars().all()
+
+        accounts_context = "\n".join(
+            f"- {acc.name} ({acc.type}, {acc.bank_name or 'N/A'})"
+            for acc in accounts
+        )
+        if not accounts_context:
+            accounts_context = "Aucun compte sélectionné."
+
+        from datetime import date as date_type
+        today = date_type.today()
+        example_date = today.replace(day=1).isoformat()
+
+        return _SYSTEM_PROMPT_TEMPLATE.format(
+            metamodel_schema=metamodel_prompt_text(),
+            accounts_context=accounts_context,
+            example_date=example_date,
+        )
+
+    # ---- conversation management ----
+
     async def list_conversations(self, user: User) -> list[Conversation]:
-        """List all conversations for a user, most recent first."""
         result = await self.db.execute(
             select(Conversation)
             .where(Conversation.user_id == user.id)
@@ -153,7 +335,6 @@ class ChatService:
     async def get_conversation(
         self, conversation_id: int, user: User
     ) -> Conversation | None:
-        """Get a conversation with all messages."""
         result = await self.db.execute(
             select(Conversation)
             .options(selectinload(Conversation.messages))
@@ -167,7 +348,6 @@ class ChatService:
     async def delete_conversation(
         self, conversation_id: int, user: User
     ) -> bool:
-        """Delete a conversation and its messages."""
         conv = await self.get_conversation(conversation_id, user)
         if not conv:
             return False
@@ -176,7 +356,6 @@ class ChatService:
         return True
 
     async def check_provider_status(self) -> dict:
-        """Check if the configured LLM provider is available."""
         available = await self.llm.is_available()
         return {
             "provider": type(self.llm).__name__,
@@ -186,7 +365,6 @@ class ChatService:
     async def _get_or_create_conversation(
         self, user: User, conversation_id: int | None
     ) -> Conversation:
-        """Get existing or create a new conversation."""
         if conversation_id:
             result = await self.db.execute(
                 select(Conversation).where(
@@ -198,7 +376,6 @@ class ChatService:
             if conv:
                 return conv
 
-        # Create new conversation
         conv = Conversation(
             user_id=user.id,
             title="Nouvelle conversation",
@@ -211,7 +388,6 @@ class ChatService:
     async def _get_message_history(
         self, conversation_id: int, limit: int = 10
     ) -> list[dict]:
-        """Get recent messages for conversation context."""
         result = await self.db.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)
@@ -219,7 +395,7 @@ class ChatService:
             .limit(limit)
         )
         messages = list(result.scalars().all())
-        messages.reverse()  # chronological order
+        messages.reverse()
 
         return [
             {"role": msg.role, "content": msg.content}

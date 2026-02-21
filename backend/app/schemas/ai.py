@@ -8,11 +8,37 @@ from pydantic import BaseModel
 class ChatMessage(BaseModel):
     content: str
     conversation_id: int | None = None
+    account_ids: list[int] | None = None  # scope ceiling from UI
+
+
+class VizEncoding(BaseModel):
+    """A single channel encoding."""
+    field: str
+    type: str = "nominal"  # nominal, quantitative, temporal
+    format: str | None = None  # "currency", etc.
+
+    model_config = {"extra": "allow"}
+
+
+class VizSpec(BaseModel):
+    """Visualization specification (chart type + channel encodings)."""
+    chart: str  # bar, pie, area, kpi
+    title: str | None = None
+    encoding: dict[str, VizEncoding] = {}
+
+    model_config = {"extra": "allow"}
+
+
+class ChartResult(BaseModel):
+    """A fully resolved chart: viz spec + query result data."""
+    viz: VizSpec
+    data: list[dict]
 
 
 class ChatResponse(BaseModel):
     conversation_id: int
     message: str
+    charts: list[ChartResult] = []
     metadata: dict | None = None
 
 
