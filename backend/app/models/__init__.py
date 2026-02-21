@@ -6,6 +6,7 @@ from app.models.category import Category
 from app.models.classification_proposal import ClassificationProposal, ClassificationProposalCluster
 from app.models.conversation import Conversation, Message
 from app.models.transaction import ImportLog, Transaction
+from app.models.transaction_cluster import TransactionCluster
 from app.models.user import User
 
 __all__ = [
@@ -13,6 +14,7 @@ __all__ = [
     "User",
     "Account",
     "Transaction",
+    "TransactionCluster",
     "Category",
     "ClassificationProposal",
     "ClassificationProposalCluster",

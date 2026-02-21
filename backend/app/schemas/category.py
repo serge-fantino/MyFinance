@@ -24,6 +24,9 @@ class CategoryResponse(BaseModel):
     icon: str | None
     color: str | None
     is_system: bool
+    level: int = 1
+    level1_id: int | None = None
+    level2_id: int | None = None
     children: list["CategoryResponse"] | None = None
 
     model_config = {"from_attributes": True}
