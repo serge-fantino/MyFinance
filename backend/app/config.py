@@ -23,9 +23,22 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_days: int = 7
 
-    # OpenAI (disabled — kept for future hybrid use)
+    # OpenAI
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
+
+    # Anthropic (Claude)
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-20250514"
+
+    # Google Gemini
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.0-flash"
+
+    # AI Chat assistant
+    ai_chat_provider: str = "ollama"  # "ollama", "openai", "anthropic", "gemini"
+    ai_chat_max_context_transactions: int = 50
+    ai_chat_system_language: str = "fr"
 
     # Embeddings (local classification)
     embedding_model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"

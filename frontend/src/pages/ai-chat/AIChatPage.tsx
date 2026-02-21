@@ -1,0 +1,1049 @@
+/**
+ * AI Chat Page — conversational financial assistant.
+ *
+ * v2: dataviz query engine architecture
+ *   - Charts come as {viz, data} from the backend (not parsed from markdown)
+ *   - Account selector sends account_ids scope with each message
+ *   - LLM never sees raw data — integrity guaranteed
+ */
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  MessageSquare,
+  Plus,
+  Send,
+  Trash2,
+  Bot,
+  User,
+  Loader2,
+  AlertCircle,
+  ChevronRight,
+  ChevronDown,
+  Sparkles,
+  Wallet,
+  Check,
+  Bug,
+  RefreshCw,
+  Settings2,
+  Pencil,
+  RotateCcw,
+} from "lucide-react";
+import { aiService, Conversation, ConversationDetail, ChatResponse } from "../../services/ai.service";
+import type { DebugInfo, ProviderStatus } from "../../services/ai.service";
+import { accountService } from "../../services/account.service";
+import type { Account } from "../../types/account.types";
+import ChatChart, {
+  attachmentToPromptText,
+  parseAttachmentFromClipboard,
+} from "../../components/chat/ChatChart";
+import type { ChartResult, DatavizAttachment } from "../../components/chat/ChatChart";
+import { BarChart2, X } from "lucide-react";
+
+interface DisplayMessage {
+  id?: number;
+  role: "user" | "assistant";
+  content: string;
+  charts?: ChartResult[];
+  attachment?: DatavizAttachment | null;
+  debugInfo?: DebugInfo | null;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+  isError?: boolean;
+}
+
+// Parse message with {{CHART:i}} placeholders into segments for in-place rendering
+function parseMessageSegments(
+  content: string,
+  charts: ChartResult[] = []
+): Array<{ type: "text"; content: string } | { type: "chart"; index: number }> {
+  const segments: Array<{ type: "text"; content: string } | { type: "chart"; index: number }> = [];
+  const regex = /\{\{CHART:(\d+)\}\}/g;
+  let lastIndex = 0;
+  let match;
+  const hasPlaceholders = regex.test(content);
+  regex.lastIndex = 0; // reset after test
+  if (hasPlaceholders) {
+    while ((match = regex.exec(content)) !== null) {
+      if (match.index > lastIndex) {
+        segments.push({ type: "text", content: content.slice(lastIndex, match.index) });
+      }
+      const chartIndex = parseInt(match[1], 10);
+      if (chartIndex < charts.length) {
+        segments.push({ type: "chart", index: chartIndex });
+      }
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < content.length) {
+      segments.push({ type: "text", content: content.slice(lastIndex) });
+    }
+  } else {
+    if (content.trim()) segments.push({ type: "text", content });
+    for (let i = 0; i < charts.length; i++) {
+      segments.push({ type: "chart", index: i });
+    }
+  }
+  return segments;
+}
+
+// Simple markdown renderer (bold, italic, headers, lists, code)
+function renderMarkdown(text: string): string {
+  return text
+    .replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre class="bg-muted rounded p-2 my-1 text-xs overflow-x-auto"><code>$2</code></pre>')
+    .replace(/`([^`]+)`/g, '<code class="bg-muted px-1 rounded text-sm">$1</code>')
+    .replace(/^### (.+)$/gm, '<h4 class="font-semibold text-sm mt-3 mb-1">$1</h4>')
+    .replace(/^## (.+)$/gm, '<h3 class="font-semibold mt-3 mb-1">$1</h3>')
+    .replace(/^# (.+)$/gm, '<h2 class="font-bold text-lg mt-3 mb-1">$1</h2>')
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/^[-\u2022] (.+)$/gm, '<li class="ml-4 list-disc">$1</li>')
+    .replace(/\n/g, "<br />");
+}
+
+function DebugPanel({ debug }: { debug: DebugInfo }) {
+  const [open, setOpen] = useState(false);
+  const [expandedBlocks, setExpandedBlocks] = useState<Set<number>>(new Set());
+
+  const toggleBlock = (idx: number) => {
+    setExpandedBlocks((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
+
+  return (
+    <div className="mt-2 border border-amber-200 bg-amber-50/50 rounded-lg text-xs">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-1.5 px-3 py-1.5 text-amber-700 hover:bg-amber-100/50 transition-colors rounded-lg"
+      >
+        <Bug className="w-3 h-3" />
+        <span className="font-medium">Debug</span>
+        <span className="text-amber-500 ml-1">
+          {debug.dataviz_blocks_found} bloc{debug.dataviz_blocks_found !== 1 ? "s" : ""}
+          {" \u00b7 "}LLM {debug.llm_duration_ms ? `${(debug.llm_duration_ms / 1000).toFixed(1)}s` : "?"}
+          {" \u00b7 "}prompt {(debug.system_prompt_length / 1000).toFixed(1)}k chars
+        </span>
+        <ChevronDown className={`w-3 h-3 ml-auto transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 space-y-3">
+          {/* Top-level error */}
+          {debug.error && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-2 text-red-700 text-xs">
+              <span className="font-medium">Erreur : </span>{debug.error}
+            </div>
+          )}
+
+          {/* Summary */}
+          <div className="flex flex-wrap gap-3 text-[11px] text-amber-700">
+            <span>Scope: {debug.account_scope.length} comptes (IDs: {debug.account_scope.join(", ")})</span>
+          </div>
+
+          {/* LLM raw response */}
+          <div>
+            <div className="font-medium text-amber-700 mb-1">Réponse LLM brute :</div>
+            <pre className="bg-white border border-amber-200 rounded p-2 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap text-[10px] text-gray-700">
+              {debug.llm_raw_response}
+            </pre>
+          </div>
+
+          {/* Block traces */}
+          {debug.block_traces.map((trace, idx) => (
+            <div key={idx} className="border border-amber-200 rounded-lg overflow-hidden">
+              <button
+                onClick={() => toggleBlock(idx)}
+                className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-amber-100/50 transition-colors ${
+                  trace.error ? "bg-red-50" : "bg-white"
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${trace.error ? "bg-red-500" : "bg-green-500"}`} />
+                <span className="font-medium text-amber-800">
+                  Bloc #{idx + 1}: {(trace.viz as Record<string, unknown>)?.chart as string || "?"} &mdash; {(trace.viz as Record<string, unknown>)?.title as string || "sans titre"}
+                </span>
+                {trace.row_count != null && (
+                  <span className="text-amber-500">{trace.row_count} lignes</span>
+                )}
+                {trace.duration_ms != null && (
+                  <span className="text-amber-500">{trace.duration_ms.toFixed(0)}ms</span>
+                )}
+                <ChevronDown className={`w-3 h-3 ml-auto transition-transform ${expandedBlocks.has(idx) ? "rotate-180" : ""}`} />
+              </button>
+
+              {expandedBlocks.has(idx) && (
+                <div className="px-2.5 pb-2.5 space-y-2 bg-white">
+                  {/* Query DSL */}
+                  <div>
+                    <div className="font-medium text-amber-700 mb-0.5">Query DSL :</div>
+                    <pre className="bg-gray-50 border rounded p-1.5 overflow-x-auto text-[10px] text-gray-700 max-h-32 overflow-y-auto">
+                      {JSON.stringify(trace.query, null, 2)}
+                    </pre>
+                  </div>
+
+                  {/* SQL */}
+                  {trace.sql && (
+                    <div>
+                      <div className="font-medium text-amber-700 mb-0.5">SQL compilé :</div>
+                      <pre className="bg-gray-50 border rounded p-1.5 overflow-x-auto text-[10px] text-gray-700 max-h-32 overflow-y-auto">
+                        {trace.sql}
+                      </pre>
+                    </div>
+                  )}
+
+                  {/* Error */}
+                  {trace.error && (
+                    <div className="bg-red-50 border border-red-200 rounded p-1.5 text-red-700">
+                      {trace.error}
+                    </div>
+                  )}
+
+                  {/* Data sample */}
+                  {trace.data_sample.length > 0 && (
+                    <div>
+                      <div className="font-medium text-amber-700 mb-0.5">
+                        Données ({trace.row_count} lignes, {trace.data_sample.length} affichées) :
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="text-[10px] border-collapse">
+                          <thead>
+                            <tr>
+                              {Object.keys(trace.data_sample[0]).map((key) => (
+                                <th key={key} className="border border-gray-200 px-1.5 py-0.5 bg-gray-50 font-medium text-left">
+                                  {key}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {trace.data_sample.map((row, ri) => (
+                              <tr key={ri}>
+                                {Object.values(row).map((val, ci) => (
+                                  <td key={ci} className="border border-gray-200 px-1.5 py-0.5 text-gray-700">
+                                    {val == null ? <span className="text-gray-300">null</span> : String(val)}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MessageBubble({
+  msg,
+  showDebug,
+  onInsertToChat,
+  isLastUserMessage,
+  onEditLastMessage,
+  onResendLastMessage,
+}: {
+  msg: DisplayMessage;
+  showDebug: boolean;
+  onInsertToChat?: (text: string) => void;
+  isLastUserMessage?: boolean;
+  onEditLastMessage?: (content: string) => void;
+  onResendLastMessage?: (content: string) => void;
+}) {
+  const isUser = msg.role === "user";
+
+  return (
+    <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
+      <div
+        className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+          isUser ? "bg-primary text-primary-foreground" : "bg-blue-100 text-blue-700"
+        }`}
+      >
+        {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
+      </div>
+      <div className={`max-w-[80%] ${isUser ? "text-right" : ""} flex-1 min-w-0`}>
+        <div
+          className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+            isUser
+              ? "bg-primary text-primary-foreground rounded-tr-sm"
+              : "bg-muted rounded-tl-sm"
+          }`}
+        >
+          {/* Error indicator */}
+          {msg.isError && (
+            <div className="flex items-center gap-1.5 text-red-600 mb-1.5">
+              <AlertCircle className="w-3.5 h-3.5" />
+              <span className="text-xs font-medium">Erreur</span>
+            </div>
+          )}
+          {/* Attachment (user message with dataviz) */}
+          {msg.attachment && (
+            <div className="mb-2">
+              <AttachmentBlock attachment={msg.attachment} />
+            </div>
+          )}
+          {/* Content with charts in-place */}
+          {msg.content && (() => {
+            const segments = parseMessageSegments(msg.content, msg.charts ?? []);
+            if (segments.length === 0) return null;
+            return (
+              <div className="prose prose-sm max-w-none dark:prose-invert space-y-2">
+                {segments.map((seg, i) =>
+                  seg.type === "text" ? (
+                    seg.content.trim() ? (
+                      <div
+                        key={i}
+                        dangerouslySetInnerHTML={{ __html: renderMarkdown(seg.content) }}
+                      />
+                    ) : null
+                  ) : msg.charts && seg.index < msg.charts.length ? (
+                    <ChatChart
+                      key={i}
+                      chart={msg.charts[seg.index]}
+                      onInsertToChat={onInsertToChat}
+                    />
+                  ) : null
+                )}
+              </div>
+            );
+          })()}
+        </div>
+        {/* Edit / Resend buttons — last user message only */}
+        {isUser && isLastUserMessage && (onEditLastMessage || onResendLastMessage) && (
+          <div className="flex items-center gap-1 mt-2 justify-end">
+            {onEditLastMessage && (
+              <button
+                onClick={() => onEditLastMessage(msg.content)}
+                className="flex items-center gap-1 px-2 py-1 text-[11px] rounded hover:bg-primary/20 text-primary transition-colors"
+                title="Modifier et renvoyer"
+              >
+                <Pencil className="w-3 h-3" />
+                Modifier
+              </button>
+            )}
+            {onResendLastMessage && (
+              <button
+                onClick={() => onResendLastMessage(msg.content)}
+                className="flex items-center gap-1 px-2 py-1 text-[11px] rounded hover:bg-primary/20 text-primary transition-colors"
+                title="Relancer la question"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Relancer
+              </button>
+            )}
+          </div>
+        )}
+        {/* Debug panel — outside the bubble, full width */}
+        {showDebug && msg.debugInfo && (
+          <DebugPanel debug={msg.debugInfo} />
+        )}
+        {/* Legend: model + date/time for assistant, time only for user */}
+        {msg.created_at && (
+          <div className="text-[10px] text-muted-foreground mt-1 px-1">
+            {!isUser && msg.metadata?.model_name && (
+              <span>{String(msg.metadata.model_name)} · </span>
+            )}
+            {new Date(msg.created_at).toLocaleString("fr-FR", {
+              day: "2-digit",
+              month: "2-digit",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Compact attachment block for display in user message or above input */
+function AttachmentBlock({
+  attachment,
+  compact = false,
+  onRemove,
+}: {
+  attachment: DatavizAttachment;
+  compact?: boolean;
+  onRemove?: () => void;
+}) {
+  const { title, data } = attachment;
+
+  return (
+    <div
+      className={`rounded-lg border bg-muted/30 overflow-hidden ${
+        compact ? "max-w-xs" : ""
+      }`}
+    >
+      <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/50">
+        <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+          <BarChart2 className="w-4 h-4 text-primary" />
+        </div>
+        <span className="text-sm font-medium truncate flex-1">{title}</span>
+        <span className="text-xs text-muted-foreground">
+          {data.length} ligne{data.length > 1 ? "s" : ""}
+        </span>
+        {onRemove && (
+          <button
+            onClick={onRemove}
+            className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+            title="Retirer"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        )}
+      </div>
+      {!compact && (
+        <div className="p-2 max-h-32 overflow-y-auto">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr>
+                {attachment.columns.slice(0, 4).map((c, i) => (
+                  <th key={i} className="text-left px-1.5 py-0.5 font-medium text-muted-foreground">
+                    {c.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {attachment.data.slice(0, 5).map((row, ri) => (
+                <tr key={ri} className="border-t border-muted/50">
+                  {attachment.columns.slice(0, 4).map((c, ci) => (
+                    <td key={ci} className="px-1.5 py-0.5">
+                      {row[c.field] != null ? String(row[c.field]) : ""}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {attachment.data.length > 5 && (
+            <div className="text-[10px] text-muted-foreground mt-1">
+              ... et {attachment.data.length - 5} autres lignes
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const SUGGESTION_PROMPTS = [
+  "Quel est mon solde actuel sur tous mes comptes ?",
+  "Quelle est la répartition de mes dépenses ce mois-ci ?",
+  "Comment a évolué mon cashflow ces 3 derniers mois ?",
+  "Quelles sont mes plus grosses dépenses du mois ?",
+];
+
+export default function AIChatPage() {
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversation, setActiveConversation] = useState<number | null>(null);
+  const [messages, setMessages] = useState<DisplayMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
+  const [providerMenuOpen, setProviderMenuOpen] = useState(false);
+  const [configLoading, setConfigLoading] = useState(false);
+  const [attachedDataviz, setAttachedDataviz] = useState<DatavizAttachment | null>(null);
+
+  // Account scope
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+
+  // Debug mode
+  const [debugMode, setDebugMode] = useState(false);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
+  const providerMenuRef = useRef<HTMLDivElement>(null);
+
+  // Load on mount
+  useEffect(() => {
+    loadConversations();
+    loadProviderStatus();
+    loadAccounts();
+  }, []);
+
+  // Auto-scroll
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = "auto";
+      inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 120) + "px";
+    }
+  }, [input]);
+
+  // Close account menu on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (accountMenuRef.current && !accountMenuRef.current.contains(e.target as Node)) {
+        setAccountMenuOpen(false);
+      }
+      if (providerMenuRef.current && !providerMenuRef.current.contains(e.target as Node)) {
+        setProviderMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  async function loadAccounts() {
+    try {
+      const data = await accountService.list();
+      setAccounts(data);
+      // Default: all accounts selected
+      setSelectedAccountIds(data.map((a) => a.id));
+    } catch {
+      // silently fail
+    }
+  }
+
+  async function loadConversations() {
+    try {
+      const data = await aiService.listConversations();
+      setConversations(data);
+    } catch {
+      // silently fail
+    }
+  }
+
+  async function loadProviderStatus() {
+    try {
+      const status = await aiService.getProviderStatus();
+      setProviderStatus(status);
+    } catch {
+      setProviderStatus({ provider: "unknown", available: false });
+    }
+  }
+
+  async function handleProviderChange(providerId: string) {
+    setConfigLoading(true);
+    setProviderMenuOpen(false);
+    try {
+      const status = await aiService.updateProviderConfig(providerId);
+      setProviderStatus(status);
+    } catch {
+      await loadProviderStatus();
+    } finally {
+      setConfigLoading(false);
+    }
+  }
+
+  async function handleReloadProvider() {
+    setConfigLoading(true);
+    try {
+      const current =
+        providerStatus?.current_provider ??
+        providerStatus?.provider?.toLowerCase().replace(/chatprovider$/i, "") ??
+        "ollama";
+      const status = await aiService.updateProviderConfig(current);
+      setProviderStatus(status);
+    } catch {
+      await loadProviderStatus();
+    } finally {
+      setConfigLoading(false);
+    }
+  }
+
+  async function loadConversation(id: number) {
+    try {
+      const detail: ConversationDetail = await aiService.getConversation(id);
+      setActiveConversation(id);
+      setMessages(
+        detail.messages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({
+            id: m.id,
+            role: m.role as "user" | "assistant",
+            content: m.content,
+            charts: (m.metadata as Record<string, unknown>)?.charts as ChartResult[] | undefined,
+            metadata: m.metadata,
+            created_at: m.created_at,
+          }))
+      );
+    } catch {
+      // Failed to load
+    }
+  }
+
+  function startNewConversation() {
+    setActiveConversation(null);
+    setMessages([]);
+    setInput("");
+    setAttachedDataviz(null);
+    inputRef.current?.focus();
+  }
+
+  function handleEditLastMessage(content: string) {
+    setMessages((prev) => {
+      const lastUserIdx = prev.map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i >= 0).pop() ?? -1;
+      if (lastUserIdx < 0) return prev;
+      return prev.slice(0, lastUserIdx);
+    });
+    setInput(content);
+    inputRef.current?.focus();
+  }
+
+  function handleResendLastMessage(content: string) {
+    setMessages((prev) => {
+      const lastUserIdx = prev.map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i >= 0).pop() ?? -1;
+      if (lastUserIdx < 0) return prev;
+      return prev.slice(0, lastUserIdx);
+    });
+    sendMessage(content);
+  }
+
+  async function deleteConversation(id: number, e: React.MouseEvent) {
+    e.stopPropagation();
+    try {
+      await aiService.deleteConversation(id);
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+      if (activeConversation === id) {
+        startNewConversation();
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  function toggleAccount(accountId: number) {
+    setSelectedAccountIds((prev) =>
+      prev.includes(accountId)
+        ? prev.filter((id) => id !== accountId)
+        : [...prev, accountId]
+    );
+  }
+
+  function toggleAllAccounts() {
+    if (selectedAccountIds.length === accounts.length) {
+      setSelectedAccountIds([]);
+    } else {
+      setSelectedAccountIds(accounts.map((a) => a.id));
+    }
+  }
+
+  const sendMessage = useCallback(
+    async (text?: string) => {
+      const prompt = (text || input).trim();
+      const hasAttachment = !!attachedDataviz;
+      const contentToSend = hasAttachment
+        ? attachmentToPromptText(attachedDataviz!) + "\n\n" + (prompt || "Peux-tu analyser ces données ?")
+        : prompt;
+      if (!contentToSend || loading) return;
+
+      setInput("");
+      setAttachedDataviz(null);
+      const userMsg: DisplayMessage = {
+        role: "user",
+        content: prompt || (hasAttachment ? "Analyse des données jointes" : ""),
+        attachment: hasAttachment ? attachedDataviz! : undefined,
+        created_at: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, userMsg]);
+      setLoading(true);
+
+      try {
+        const response: ChatResponse = await aiService.chat({
+          content: contentToSend,
+          conversation_id: activeConversation || undefined,
+          account_ids: selectedAccountIds.length < accounts.length
+            ? selectedAccountIds
+            : undefined, // undefined = all accounts (default)
+          debug: debugMode || undefined,
+        });
+
+        if (!activeConversation && response.conversation_id) {
+          setActiveConversation(response.conversation_id);
+        }
+
+        // Build assistant message — may be a success or a server-side error
+        const assistantMsg: DisplayMessage = {
+          role: "assistant",
+          content: response.error
+            ? `Désolé, une erreur s'est produite : ${response.error}`
+            : response.message,
+          charts: response.charts,
+          debugInfo: response.debug,
+          metadata: response.metadata,
+          created_at: new Date().toISOString(),
+          isError: !!response.error,
+        };
+        setMessages((prev) => [...prev, assistantMsg]);
+        loadConversations();
+      } catch (err: unknown) {
+        // Network-level error (API unreachable, 401, etc.)
+        const errorMessage =
+          err instanceof Error ? err.message : "Erreur lors de l'envoi du message";
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: `Désolé, une erreur s'est produite : ${errorMessage}`,
+            created_at: new Date().toISOString(),
+            isError: true,
+          },
+        ]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [input, loading, activeConversation, selectedAccountIds, accounts.length, debugMode, attachedDataviz]
+  );
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  }
+
+  const providerLabel =
+    providerStatus?.provider === "OllamaChatProvider"
+      ? "Ollama (local)"
+      : providerStatus?.provider === "OpenAIChatProvider"
+      ? "OpenAI"
+      : providerStatus?.provider === "AnthropicChatProvider"
+      ? "Anthropic (Claude)"
+      : providerStatus?.provider === "GeminiChatProvider"
+      ? "Google Gemini"
+      : providerStatus?.provider ?? "IA";
+
+  const accountScopeLabel =
+    selectedAccountIds.length === 0
+      ? "Aucun compte"
+      : selectedAccountIds.length === accounts.length
+      ? "Tous les comptes"
+      : `${selectedAccountIds.length} compte${selectedAccountIds.length > 1 ? "s" : ""}`;
+
+  return (
+    <div className="flex h-[calc(100vh-7rem)] overflow-hidden">
+      {/* Main chat area — left */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        {/* Header */}
+        <div className="flex items-center gap-2 px-4 py-2 border-b bg-background">
+          <button
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="p-1.5 rounded hover:bg-muted transition-colors"
+          >
+            <ChevronRight
+              className={`w-4 h-4 transition-transform ${sidebarOpen ? "rotate-180" : ""}`}
+            />
+          </button>
+          <Sparkles className="w-4 h-4 text-blue-500" />
+          <span className="font-medium text-sm">Assistant IA</span>
+
+          {/* Debug toggle */}
+          <button
+            onClick={() => setDebugMode(!debugMode)}
+            className={`ml-auto flex items-center gap-1 px-2 py-1.5 text-xs rounded-lg border transition-colors ${
+              debugMode
+                ? "bg-amber-100 border-amber-300 text-amber-700"
+                : "hover:bg-muted text-muted-foreground"
+            }`}
+            title={debugMode ? "Mode debug actif" : "Activer le mode debug"}
+          >
+            <Bug className="w-3.5 h-3.5" />
+            {debugMode && <span>Debug</span>}
+          </button>
+
+          {/* Account scope selector */}
+          <div className="relative" ref={accountMenuRef}>
+            <button
+              onClick={() => setAccountMenuOpen(!accountMenuOpen)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border hover:bg-muted transition-colors"
+            >
+              <Wallet className="w-3.5 h-3.5" />
+              <span>{accountScopeLabel}</span>
+            </button>
+            {accountMenuOpen && accounts.length > 0 && (
+              <div className="absolute right-0 top-full mt-1 w-56 bg-background border rounded-lg shadow-lg z-50 py-1">
+                <button
+                  onClick={toggleAllAccounts}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted transition-colors"
+                >
+                  <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center ${
+                    selectedAccountIds.length === accounts.length ? "bg-primary border-primary" : ""
+                  }`}>
+                    {selectedAccountIds.length === accounts.length && (
+                      <Check className="w-2.5 h-2.5 text-primary-foreground" />
+                    )}
+                  </span>
+                  <span className="font-medium">Tous les comptes</span>
+                </button>
+                <div className="border-t my-1" />
+                {accounts.map((acc) => (
+                  <button
+                    key={acc.id}
+                    onClick={() => toggleAccount(acc.id)}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted transition-colors"
+                  >
+                    <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center ${
+                      selectedAccountIds.includes(acc.id) ? "bg-primary border-primary" : ""
+                    }`}>
+                      {selectedAccountIds.includes(acc.id) && (
+                        <Check className="w-2.5 h-2.5 text-primary-foreground" />
+                      )}
+                    </span>
+                    <span className="truncate">{acc.name}</span>
+                    <span className="text-muted-foreground ml-auto">{acc.type}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {loading && (
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Réflexion...
+            </div>
+          )}
+        </div>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+          {messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-center">
+              <div className="rounded-full bg-blue-100 p-4 mb-4">
+                <Bot className="w-8 h-8 text-blue-600" />
+              </div>
+              <h3 className="font-semibold text-lg mb-1">Assistant Financier IA</h3>
+              <p className="text-sm text-muted-foreground max-w-md mb-6">
+                Posez-moi des questions sur vos finances. J'analyse vos transactions,
+                catégories et cashflow pour vous donner des insights personnalisés.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-lg">
+                {SUGGESTION_PROMPTS.map((prompt, i) => (
+                  <button
+                    key={i}
+                    onClick={() => sendMessage(prompt)}
+                    className="text-left text-sm px-3 py-2.5 rounded-lg border hover:bg-muted transition-colors"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            messages.map((msg, i) => {
+              const lastUserIdx = (() => {
+                for (let j = messages.length - 1; j >= 0; j--) {
+                  if (messages[j].role === "user") return j;
+                }
+                return -1;
+              })();
+              return (
+                <MessageBubble
+                  key={i}
+                  msg={msg}
+                  showDebug={debugMode}
+                onAddAsAttachment={(att) => {
+                  setAttachedDataviz(att);
+                  setInput((prev) => prev || "Peux-tu analyser ces données et me donner des insights ?");
+                  inputRef.current?.focus();
+                }}
+                  isLastUserMessage={msg.role === "user" && i === lastUserIdx}
+                  onEditLastMessage={handleEditLastMessage}
+                  onResendLastMessage={handleResendLastMessage}
+                />
+              );
+            })
+          )}
+
+          {loading && (
+            <div className="flex gap-3">
+              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <Bot className="w-4 h-4 text-blue-700" />
+              </div>
+              <div className="bg-muted rounded-2xl rounded-tl-sm px-4 py-3">
+                <div className="flex items-center gap-1">
+                  <span className="w-2 h-2 bg-foreground/40 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                  <span className="w-2 h-2 bg-foreground/40 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                  <span className="w-2 h-2 bg-foreground/40 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                </div>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Provider unavailable warning */}
+        {providerStatus && !providerStatus.available && (
+          <div className="mx-4 mb-2 flex items-center gap-2 text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
+            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+            Le provider {providerLabel} n'est pas disponible. Vérifiez la configuration.
+          </div>
+        )}
+
+        {/* Input area */}
+        <div className="flex-shrink-0 border-t p-3 bg-background">
+          {/* Attachment preview above input */}
+          {attachedDataviz && (
+            <div className="max-w-3xl mx-auto mb-2">
+              <AttachmentBlock
+                attachment={attachedDataviz}
+                compact
+                onRemove={() => setAttachedDataviz(null)}
+              />
+            </div>
+          )}
+          <div className="flex items-end gap-2 max-w-3xl mx-auto">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onPaste={(e) => {
+                const pasted = e.clipboardData?.getData("text");
+                if (pasted) {
+                  const att = parseAttachmentFromClipboard(pasted);
+                  if (att) {
+                    e.preventDefault();
+                    setAttachedDataviz(att);
+                    setInput((prev) => prev || "Peux-tu analyser ces données et me donner des insights ?");
+                  }
+                }
+              }}
+              placeholder="Posez une question sur vos finances..."
+              rows={1}
+              className="flex-1 resize-none rounded-xl border bg-muted/50 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+              disabled={loading}
+            />
+            <button
+              onClick={() => sendMessage()}
+              disabled={(!input.trim() && !attachedDataviz) || loading}
+              className="p-2.5 rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="text-center text-[10px] text-muted-foreground mt-1.5">
+            L'IA analyse vos données financières réelles. Les réponses sont indicatives.
+          </div>
+        </div>
+      </div>
+
+      {/* Sidebar — right */}
+      <div
+        className={`${
+          sidebarOpen ? "w-64" : "w-0"
+        } flex-shrink-0 border-l bg-muted/30 transition-all duration-200 overflow-hidden`}
+      >
+        <div className="w-64 h-full flex flex-col">
+          <div className="p-3 border-b">
+            <button
+              onClick={startNewConversation}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-dashed hover:bg-muted transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Nouvelle conversation
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {conversations.length === 0 ? (
+              <div className="p-4 text-xs text-muted-foreground text-center">
+                Aucune conversation
+              </div>
+            ) : (
+              conversations.map((conv) => (
+                <div
+                  key={conv.id}
+                  onClick={() => loadConversation(conv.id)}
+                  className={`group flex items-center gap-2 px-3 py-2.5 cursor-pointer hover:bg-muted transition-colors text-sm ${
+                    activeConversation === conv.id ? "bg-muted font-medium" : ""
+                  }`}
+                >
+                  <MessageSquare className="w-3.5 h-3.5 flex-shrink-0 text-muted-foreground" />
+                  <span className="truncate flex-1">{conv.title}</span>
+                  <button
+                    onClick={(e) => deleteConversation(conv.id, e)}
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-destructive transition-opacity"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* AI Config panel */}
+          {providerStatus && (
+            <div className="p-3 border-t space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                  Config IA
+                </span>
+                <button
+                  onClick={handleReloadProvider}
+                  disabled={configLoading}
+                  className="p-1 rounded hover:bg-muted transition-colors disabled:opacity-50"
+                  title="Recharger le provider"
+                >
+                  <RefreshCw className={`w-3 h-3 ${configLoading ? "animate-spin" : ""}`} />
+                </button>
+              </div>
+              <div className="space-y-1.5 text-xs">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                      providerStatus.available ? "bg-green-500" : "bg-red-500"
+                    }`}
+                  />
+                  <span className="text-muted-foreground truncate">
+                    {providerLabel}
+                    {providerStatus.available ? "" : " (indisponible)"}
+                  </span>
+                </div>
+                {providerStatus.model_name && (
+                  <div className="text-muted-foreground pl-4 text-[11px] truncate" title={providerStatus.model_name}>
+                    Modèle : {providerStatus.model_name}
+                  </div>
+                )}
+              </div>
+              {providerStatus.providers && providerStatus.providers.length > 0 && (
+                <div className="relative" ref={providerMenuRef}>
+                  <button
+                    onClick={() => setProviderMenuOpen(!providerMenuOpen)}
+                    disabled={configLoading}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 text-[11px] rounded border hover:bg-muted transition-colors disabled:opacity-50"
+                  >
+                    <Settings2 className="w-3 h-3 flex-shrink-0" />
+                    <span className="truncate">Changer le provider</span>
+                  </button>
+                  {providerMenuOpen && (
+                    <div className="absolute bottom-full left-0 right-0 mb-1 bg-background border rounded-lg shadow-lg z-50 py-1 max-h-40 overflow-y-auto">
+                      {providerStatus.providers.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => handleProviderChange(p.id)}
+                          className={`w-full flex flex-col items-start px-3 py-2 text-left hover:bg-muted transition-colors ${
+                            providerStatus.current_provider === p.id ? "bg-muted/50" : ""
+                          }`}
+                        >
+                          <span className="text-xs font-medium">{p.label}</span>
+                          <span className="text-[10px] text-muted-foreground truncate w-full">{p.model}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
