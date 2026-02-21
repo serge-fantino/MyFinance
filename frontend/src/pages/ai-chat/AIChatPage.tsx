@@ -16,7 +16,7 @@ import {
   User,
   Loader2,
   AlertCircle,
-  ChevronLeft,
+  ChevronRight,
   ChevronDown,
   Sparkles,
   Wallet,
@@ -100,7 +100,7 @@ function DebugPanel({ debug }: { debug: DebugInfo }) {
 
           {/* LLM raw response */}
           <div>
-            <div className="font-medium text-amber-700 mb-1">R\u00e9ponse LLM brute :</div>
+            <div className="font-medium text-amber-700 mb-1">Réponse LLM brute :</div>
             <pre className="bg-white border border-amber-200 rounded p-2 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap text-[10px] text-gray-700">
               {debug.llm_raw_response}
             </pre>
@@ -141,7 +141,7 @@ function DebugPanel({ debug }: { debug: DebugInfo }) {
                   {/* SQL */}
                   {trace.sql && (
                     <div>
-                      <div className="font-medium text-amber-700 mb-0.5">SQL compil\u00e9 :</div>
+                      <div className="font-medium text-amber-700 mb-0.5">SQL compilé :</div>
                       <pre className="bg-gray-50 border rounded p-1.5 overflow-x-auto text-[10px] text-gray-700 max-h-32 overflow-y-auto">
                         {trace.sql}
                       </pre>
@@ -159,7 +159,7 @@ function DebugPanel({ debug }: { debug: DebugInfo }) {
                   {trace.data_sample.length > 0 && (
                     <div>
                       <div className="font-medium text-amber-700 mb-0.5">
-                        Donn\u00e9es ({trace.row_count} lignes, {trace.data_sample.length} affich\u00e9es) :
+                        Données ({trace.row_count} lignes, {trace.data_sample.length} affichées) :
                       </div>
                       <div className="overflow-x-auto">
                         <table className="text-[10px] border-collapse">
@@ -255,9 +255,9 @@ function MessageBubble({ msg, showDebug }: { msg: DisplayMessage; showDebug: boo
 
 const SUGGESTION_PROMPTS = [
   "Quel est mon solde actuel sur tous mes comptes ?",
-  "Quelle est la r\u00e9partition de mes d\u00e9penses ce mois-ci ?",
-  "Comment a \u00e9volu\u00e9 mon cashflow ces 3 derniers mois ?",
-  "Quelles sont mes plus grosses d\u00e9penses du mois ?",
+  "Quelle est la répartition de mes dépenses ce mois-ci ?",
+  "Comment a évolué mon cashflow ces 3 derniers mois ?",
+  "Quelles sont mes plus grosses dépenses du mois ?",
 ];
 
 export default function AIChatPage() {
@@ -482,76 +482,17 @@ export default function AIChatPage() {
       : `${selectedAccountIds.length} compte${selectedAccountIds.length > 1 ? "s" : ""}`;
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
-      {/* Sidebar */}
-      <div
-        className={`${
-          sidebarOpen ? "w-64" : "w-0"
-        } flex-shrink-0 border-r bg-muted/30 transition-all duration-200 overflow-hidden`}
-      >
-        <div className="w-64 h-full flex flex-col">
-          <div className="p-3 border-b">
-            <button
-              onClick={startNewConversation}
-              className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-dashed hover:bg-muted transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Nouvelle conversation
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {conversations.length === 0 ? (
-              <div className="p-4 text-xs text-muted-foreground text-center">
-                Aucune conversation
-              </div>
-            ) : (
-              conversations.map((conv) => (
-                <div
-                  key={conv.id}
-                  onClick={() => loadConversation(conv.id)}
-                  className={`group flex items-center gap-2 px-3 py-2.5 cursor-pointer hover:bg-muted transition-colors text-sm ${
-                    activeConversation === conv.id ? "bg-muted font-medium" : ""
-                  }`}
-                >
-                  <MessageSquare className="w-3.5 h-3.5 flex-shrink-0 text-muted-foreground" />
-                  <span className="truncate flex-1">{conv.title}</span>
-                  <button
-                    onClick={(e) => deleteConversation(conv.id, e)}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-destructive transition-opacity"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-
-          {providerStatus && (
-            <div className="p-3 border-t text-xs flex items-center gap-2">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  providerStatus.available ? "bg-green-500" : "bg-red-500"
-                }`}
-              />
-              <span className="text-muted-foreground">
-                {providerLabel}
-                {providerStatus.available ? "" : " (indisponible)"}
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Main chat area */}
-      <div className="flex-1 flex flex-col min-w-0">
+    <div className="flex h-[calc(100vh-7rem)] overflow-hidden">
+      {/* Main chat area — left */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {/* Header */}
         <div className="flex items-center gap-2 px-4 py-2 border-b bg-background">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="p-1.5 rounded hover:bg-muted transition-colors"
           >
-            <ChevronLeft
-              className={`w-4 h-4 transition-transform ${sidebarOpen ? "" : "rotate-180"}`}
+            <ChevronRight
+              className={`w-4 h-4 transition-transform ${sidebarOpen ? "rotate-180" : ""}`}
             />
           </button>
           <Sparkles className="w-4 h-4 text-blue-500" />
@@ -620,7 +561,7 @@ export default function AIChatPage() {
           {loading && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <Loader2 className="w-3 h-3 animate-spin" />
-              R\u00e9flexion...
+              Réflexion...
             </div>
           )}
         </div>
@@ -635,7 +576,7 @@ export default function AIChatPage() {
               <h3 className="font-semibold text-lg mb-1">Assistant Financier IA</h3>
               <p className="text-sm text-muted-foreground max-w-md mb-6">
                 Posez-moi des questions sur vos finances. J'analyse vos transactions,
-                cat\u00e9gories et cashflow pour vous donner des insights personnalis\u00e9s.
+                catégories et cashflow pour vous donner des insights personnalisés.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-lg">
                 {SUGGESTION_PROMPTS.map((prompt, i) => (
@@ -674,12 +615,12 @@ export default function AIChatPage() {
         {providerStatus && !providerStatus.available && (
           <div className="mx-4 mb-2 flex items-center gap-2 text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
             <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-            Le provider {providerLabel} n'est pas disponible. V\u00e9rifiez la configuration.
+            Le provider {providerLabel} n'est pas disponible. Vérifiez la configuration.
           </div>
         )}
 
         {/* Input area */}
-        <div className="border-t p-3 bg-background">
+        <div className="flex-shrink-0 border-t p-3 bg-background">
           <div className="flex items-end gap-2 max-w-3xl mx-auto">
             <textarea
               ref={inputRef}
@@ -700,8 +641,67 @@ export default function AIChatPage() {
             </button>
           </div>
           <div className="text-center text-[10px] text-muted-foreground mt-1.5">
-            L'IA analyse vos donn\u00e9es financi\u00e8res r\u00e9elles. Les r\u00e9ponses sont indicatives.
+            L'IA analyse vos données financières réelles. Les réponses sont indicatives.
           </div>
+        </div>
+      </div>
+
+      {/* Sidebar — right */}
+      <div
+        className={`${
+          sidebarOpen ? "w-64" : "w-0"
+        } flex-shrink-0 border-l bg-muted/30 transition-all duration-200 overflow-hidden`}
+      >
+        <div className="w-64 h-full flex flex-col">
+          <div className="p-3 border-b">
+            <button
+              onClick={startNewConversation}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-dashed hover:bg-muted transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Nouvelle conversation
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {conversations.length === 0 ? (
+              <div className="p-4 text-xs text-muted-foreground text-center">
+                Aucune conversation
+              </div>
+            ) : (
+              conversations.map((conv) => (
+                <div
+                  key={conv.id}
+                  onClick={() => loadConversation(conv.id)}
+                  className={`group flex items-center gap-2 px-3 py-2.5 cursor-pointer hover:bg-muted transition-colors text-sm ${
+                    activeConversation === conv.id ? "bg-muted font-medium" : ""
+                  }`}
+                >
+                  <MessageSquare className="w-3.5 h-3.5 flex-shrink-0 text-muted-foreground" />
+                  <span className="truncate flex-1">{conv.title}</span>
+                  <button
+                    onClick={(e) => deleteConversation(conv.id, e)}
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-destructive transition-opacity"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+
+          {providerStatus && (
+            <div className="p-3 border-t text-xs flex items-center gap-2">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  providerStatus.available ? "bg-green-500" : "bg-red-500"
+                }`}
+              />
+              <span className="text-muted-foreground">
+                {providerLabel}
+                {providerStatus.available ? "" : " (indisponible)"}
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </div>
