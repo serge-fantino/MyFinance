@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import structlog
@@ -32,6 +32,8 @@ from app.services.metamodel import (
     ALLOWED_AGGREGATES,
     ALLOWED_FILTER_OPS,
     ALLOWED_TEMPORAL_FUNCTIONS,
+    PERIOD_DYNAMIC_RE_PATTERN,
+    PERIOD_MACROS,
     FieldType,
 )
 
@@ -411,8 +413,75 @@ def _compile_aggregate(agg: AggregateClause, source_name: str):
     return fn_map[agg.fn](col)
 
 
+def _resolve_period(period_name: str) -> tuple[date, date]:
+    """Resolve a named period macro to a (start_date, end_date) range.
+
+    All dates are inclusive. Resolved server-side so the LLM never needs
+    to know the current date.
+    """
+    today = date.today()
+
+    if period_name in ("current_month",):
+        return today.replace(day=1), today
+
+    if period_name == "last_month":
+        first_of_this = today.replace(day=1)
+        last_month_end = first_of_this - timedelta(days=1)
+        return last_month_end.replace(day=1), last_month_end
+
+    if period_name == "current_quarter":
+        q_start_month = ((today.month - 1) // 3) * 3 + 1
+        return today.replace(month=q_start_month, day=1), today
+
+    if period_name == "last_quarter":
+        q_start_month = ((today.month - 1) // 3) * 3 + 1
+        q_start = today.replace(month=q_start_month, day=1)
+        last_q_end = q_start - timedelta(days=1)
+        last_q_start_month = ((last_q_end.month - 1) // 3) * 3 + 1
+        return last_q_end.replace(month=last_q_start_month, day=1), last_q_end
+
+    if period_name in ("current_year", "ytd"):
+        return today.replace(month=1, day=1), today
+
+    if period_name == "last_year":
+        return date(today.year - 1, 1, 1), date(today.year - 1, 12, 31)
+
+    # Dynamic patterns: last_N_months, last_N_days
+    m = re.match(PERIOD_DYNAMIC_RE_PATTERN, period_name)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2)
+        if unit == "days":
+            return today - timedelta(days=n), today
+        if unit == "months":
+            return _subtract_months(today, n), today
+
+    # Also check static macros like last_30_days which match the regex
+    if period_name in PERIOD_MACROS:
+        # If we get here, it's a known macro not handled above — shouldn't happen
+        pass
+
+    raise QueryValidationError(f"Période inconnue : {period_name!r}")
+
+
+def _subtract_months(d: date, months: int) -> date:
+    """Return the 1st of the month that is N months before d."""
+    month = d.month - months
+    year = d.year
+    while month <= 0:
+        month += 12
+        year -= 1
+    return date(year, month, 1)
+
+
 def _apply_filter(stmt: Select, f: FilterClause, source_name: str) -> Select:
     """Apply a single filter clause to the statement."""
+    # Period macro — expands to date >= start AND date <= end
+    if f.op == "period":
+        col = _resolve_select_column(f.field, source_name)
+        start_date, end_date = _resolve_period(str(f.value))
+        return stmt.where(col >= start_date, col <= end_date)
+
     col = _resolve_select_column(f.field, source_name)
 
     # Direction virtual field

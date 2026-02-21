@@ -140,6 +140,34 @@ Table columns (pour chart "table") :
 - "columns": liste de {{"field": "...", "label": "...", "format": "currency|..."}}
 - "field" = nom de colonne en sortie (aplati: "category_name" au lieu de "category.name")
 
+=== FILTRES TEMPORELS (MACROS PÉRIODE) ===
+
+Pour filtrer sur une période, utilise l'opérateur "period" au lieu de calculer des dates manuellement.
+Le moteur résout la macro côté serveur à la date du jour.
+
+Syntaxe : {{"field": "date", "op": "period", "value": "<nom_macro>"}}
+
+Macros disponibles :
+- "current_month"   : mois en cours
+- "last_month"      : mois précédent
+- "current_quarter" : trimestre en cours
+- "last_quarter"    : trimestre précédent
+- "current_year"    : année en cours (depuis le 1er janvier)
+- "last_year"       : année précédente complète
+- "ytd"             : year-to-date (= current_year)
+- "last_30_days"    : 30 derniers jours
+- "last_90_days"    : 90 derniers jours
+- "last_6_months"   : 6 derniers mois
+- "last_12_months"  : 12 derniers mois
+- "last_N_months"   : N derniers mois (N = nombre quelconque)
+- "last_N_days"     : N derniers jours
+
+IMPORTANT : préfère TOUJOURS les macros "period" plutôt que des filtres >= / <= avec des dates en dur.
+Les macros sont résolues côté serveur, tu n'as pas besoin de connaître la date du jour.
+
+Tu peux combiner "period" avec d'autres filtres :
+{{"filters": [{{"field": "date", "op": "period", "value": "current_month"}}, {{"field": "direction", "op": "=", "value": "expense"}}]}}
+
 === SCHEMA DES DONNÉES (metamodel) ===
 
 {metamodel_schema}
@@ -157,17 +185,17 @@ Dernières transactions :
 
 Dépenses par catégorie ce mois :
 ```dataviz
-{{"query": {{"source": "transactions", "filters": [{{"field": "direction", "op": "=", "value": "expense"}}, {{"field": "date", "op": ">=", "value": "{example_date}"}}], "groupBy": ["category.name"], "aggregates": [{{"fn": "sum", "field": "amount", "as": "total"}}, {{"fn": "count", "as": "nb"}}], "orderBy": [{{"field": "total", "dir": "asc"}}], "limit": 10}}, "viz": {{"chart": "bar", "title": "Top dépenses par catégorie", "encoding": {{"x": {{"field": "category_name", "type": "nominal"}}, "y": {{"field": "total", "type": "quantitative", "format": "currency"}}}}}}}}
+{{"query": {{"source": "transactions", "filters": [{{"field": "direction", "op": "=", "value": "expense"}}, {{"field": "date", "op": "period", "value": "current_month"}}], "groupBy": ["category.name"], "aggregates": [{{"fn": "sum", "field": "amount", "as": "total"}}, {{"fn": "count", "as": "nb"}}], "orderBy": [{{"field": "total", "dir": "asc"}}], "limit": 10}}, "viz": {{"chart": "bar", "title": "Top dépenses par catégorie", "encoding": {{"x": {{"field": "category_name", "type": "nominal"}}, "y": {{"field": "total", "type": "quantitative", "format": "currency"}}}}}}}}
 ```
 
-Recherche de transactions par libellé :
+Recherche de transactions par libellé ce trimestre :
 ```dataviz
-{{"query": {{"source": "transactions", "fields": ["date", "label", "amount", "category.name"], "filters": [{{"field": "label", "op": "like", "value": "amazon"}}], "orderBy": [{{"field": "date", "dir": "desc"}}], "limit": 20}}, "viz": {{"chart": "table", "title": "Transactions Amazon", "columns": [{{"field": "date", "label": "Date"}}, {{"field": "label", "label": "Libellé"}}, {{"field": "amount", "label": "Montant", "format": "currency"}}, {{"field": "category_name", "label": "Catégorie"}}]}}}}
+{{"query": {{"source": "transactions", "fields": ["date", "label", "amount", "category.name"], "filters": [{{"field": "label", "op": "like", "value": "amazon"}}, {{"field": "date", "op": "period", "value": "current_quarter"}}], "orderBy": [{{"field": "date", "dir": "desc"}}], "limit": 20}}, "viz": {{"chart": "table", "title": "Transactions Amazon", "columns": [{{"field": "date", "label": "Date"}}, {{"field": "label", "label": "Libellé"}}, {{"field": "amount", "label": "Montant", "format": "currency"}}, {{"field": "category_name", "label": "Catégorie"}}]}}}}
 ```
 
-Évolution du cashflow mensuel :
+Évolution du cashflow sur les 12 derniers mois :
 ```dataviz
-{{"query": {{"source": "transactions", "groupBy": ["month(date)"], "aggregates": [{{"fn": "sum", "field": "amount", "as": "net"}}], "orderBy": [{{"field": "month", "dir": "asc"}}]}}, "viz": {{"chart": "area", "title": "Évolution du solde net", "encoding": {{"x": {{"field": "month", "type": "temporal"}}, "y": {{"field": "net", "type": "quantitative", "format": "currency"}}}}}}}}
+{{"query": {{"source": "transactions", "filters": [{{"field": "date", "op": "period", "value": "last_12_months"}}], "groupBy": ["month(date)"], "aggregates": [{{"fn": "sum", "field": "amount", "as": "net"}}], "orderBy": [{{"field": "month", "dir": "asc"}}]}}, "viz": {{"chart": "area", "title": "Évolution du solde net", "encoding": {{"x": {{"field": "month", "type": "temporal"}}, "y": {{"field": "net", "type": "quantitative", "format": "currency"}}}}}}}}
 ```
 
 Solde par compte :
@@ -471,14 +499,9 @@ class ChatService:
         if not accounts_context:
             accounts_context = "Aucun compte sélectionné."
 
-        from datetime import date as date_type
-        today = date_type.today()
-        example_date = today.replace(day=1).isoformat()
-
         return _SYSTEM_PROMPT_TEMPLATE.format(
             metamodel_schema=metamodel_prompt_text(),
             accounts_context=accounts_context,
-            example_date=example_date,
         )
 
     # ---- conversation management ----

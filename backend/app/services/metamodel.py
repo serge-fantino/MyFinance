@@ -165,7 +165,28 @@ ALL_SOURCES: dict[str, SourceDef] = {
 
 ALLOWED_AGGREGATES: set[str] = {a.value for a in AggregateFunction}
 ALLOWED_TEMPORAL_FUNCTIONS: set[str] = {t.value for t in TemporalFunction}
-ALLOWED_FILTER_OPS: set[str] = {"=", "!=", ">", "<", ">=", "<=", "in", "not_in", "like"}
+ALLOWED_FILTER_OPS: set[str] = {"=", "!=", ">", "<", ">=", "<=", "in", "not_in", "like", "period"}
+
+# ---------------------------------------------------------------------------
+# Temporal period macros — resolved server-side to date ranges
+# ---------------------------------------------------------------------------
+
+PERIOD_MACROS: dict[str, str] = {
+    "current_month": "Mois en cours",
+    "last_month": "Mois précédent",
+    "current_quarter": "Trimestre en cours",
+    "last_quarter": "Trimestre précédent",
+    "current_year": "Année en cours (depuis le 1er janvier)",
+    "last_year": "Année précédente complète",
+    "ytd": "Year-to-date (= current_year)",
+    "last_30_days": "30 derniers jours",
+    "last_90_days": "90 derniers jours",
+    "last_6_months": "6 derniers mois",
+    "last_12_months": "12 derniers mois",
+}
+
+# Pattern for dynamic last_N_months / last_N_days
+PERIOD_DYNAMIC_RE_PATTERN = r"^last_(\d+)_(months|days)$"
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +200,7 @@ def metamodel_prompt_json() -> dict:
         "temporal_functions": list(ALLOWED_TEMPORAL_FUNCTIONS),
         "aggregate_functions": list(ALLOWED_AGGREGATES),
         "filter_operators": list(ALLOWED_FILTER_OPS),
+        "period_macros": PERIOD_MACROS,
     }
 
 
