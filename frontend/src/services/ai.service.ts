@@ -13,6 +13,26 @@ export interface ChatMessage {
   content: string;
   conversation_id?: number;
   account_ids?: number[];  // scope ceiling from UI
+  debug?: boolean;
+}
+
+export interface DebugBlockTrace {
+  query: Record<string, unknown>;
+  viz: Record<string, unknown>;
+  sql: string | null;
+  row_count: number | null;
+  data_sample: Record<string, unknown>[];
+  error: string | null;
+  duration_ms: number | null;
+}
+
+export interface DebugInfo {
+  llm_raw_response: string;
+  dataviz_blocks_found: number;
+  account_scope: number[];
+  block_traces: DebugBlockTrace[];
+  system_prompt_length: number;
+  llm_duration_ms: number | null;
 }
 
 export interface ChatResponse {
@@ -22,6 +42,7 @@ export interface ChatResponse {
   metadata?: {
     provider?: string;
   };
+  debug?: DebugInfo | null;
 }
 
 export interface MessageItem {

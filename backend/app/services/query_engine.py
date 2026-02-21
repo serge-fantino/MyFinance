@@ -20,6 +20,7 @@ from decimal import Decimal
 
 import structlog
 from sqlalchemy import case, func, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import Select
 
@@ -478,15 +479,32 @@ def _default_columns(source_name: str) -> list[tuple[str, object]]:
 # Executor
 # ---------------------------------------------------------------------------
 
+def _compile_sql_text(stmt: Select) -> str:
+    """Compile a SQLAlchemy Select to a readable SQL string (for debug)."""
+    try:
+        compiled = stmt.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+        return str(compiled)
+    except Exception:
+        # Fallback: without literal binds (params shown as placeholders)
+        try:
+            return str(stmt.compile(dialect=postgresql.dialect()))
+        except Exception:
+            return "<unable to compile>"
+
+
 async def execute_query(
     db: AsyncSession,
     raw_query: dict,
     context: QueryContext,
-) -> tuple[list[dict], list[str]]:
+) -> tuple[list[dict], list[str], str | None]:
     """Parse, validate, compile and execute a dataviz query.
 
     Returns:
-        (rows, column_names) where rows is a list of dicts.
+        (rows, column_names, sql_text) where rows is a list of dicts,
+        and sql_text is the compiled SQL for debug purposes.
 
     Raises:
         QueryValidationError on invalid DSL.
@@ -495,16 +513,16 @@ async def execute_query(
 
     # Handle virtual sources
     if query.source == "balance":
-        return await _execute_balance_query(db, query, context)
+        data, col_names = await _execute_balance_query(db, query, context)
+        return data, col_names, "-- virtual source: balance (no SQL)"
 
     stmt, col_names = _compile_select(query)
 
     # ---- SECURITY: inject context (always) ----
     stmt = stmt.where(Transaction.account_id.in_(context.account_ids))
-    # account_ids are already scoped to user_id by the caller
 
-    # Join account if needed for the scope filter (always needed for safety)
-    # The outerjoin may already be present; SQLAlchemy handles duplicate joins gracefully
+    # Capture SQL text for debug before executing
+    sql_text = _compile_sql_text(stmt)
 
     logger.debug("query_engine_execute", source=query.source, col_names=col_names)
 
@@ -528,7 +546,7 @@ async def execute_query(
             d[name] = val
         data.append(d)
 
-    return data, col_names
+    return data, col_names, sql_text
 
 
 async def _execute_balance_query(

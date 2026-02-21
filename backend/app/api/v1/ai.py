@@ -31,6 +31,7 @@ async def chat(
         content=message.content,
         conversation_id=message.conversation_id,
         account_ids=message.account_ids,
+        debug=message.debug,
     )
     return ChatResponse(**result)
 

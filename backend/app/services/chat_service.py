@@ -15,6 +15,7 @@ Architecture (v2 — dataviz query engine):
 
 import json
 import re
+import time
 
 import structlog
 from sqlalchemy import select
@@ -171,6 +172,7 @@ class ChatService:
         content: str,
         conversation_id: int | None = None,
         account_ids: list[int] | None = None,
+        debug: bool = False,
     ) -> dict:
         """Process a chat message and return the AI response.
 
@@ -179,13 +181,15 @@ class ChatService:
             content: User message text.
             conversation_id: Existing conversation to continue, or None for new.
             account_ids: Account IDs selected in the UI (scope ceiling).
+            debug: When True, collect and return debug traces.
 
         Returns:
             {
                 "conversation_id": int,
-                "message": str,          # LLM text with dataviz blocks removed
-                "charts": [...],         # list of {viz, data} dicts
-                "metadata": {...}
+                "message": str,
+                "charts": [...],
+                "metadata": {...},
+                "debug": {...} | None
             }
         """
         # Resolve account scope
@@ -210,20 +214,28 @@ class ChatService:
         # Build message history
         history = await self._get_message_history(conversation.id, limit=10)
 
-        # Call LLM
+        # Call LLM (timed)
+        llm_start = time.monotonic()
         response_text = await self.llm.chat(
             system_prompt=system_prompt,
             messages=history,
             temperature=0.3,
         )
+        llm_duration_ms = (time.monotonic() - llm_start) * 1000
 
         # Parse dataviz blocks and execute queries
         dataviz_blocks = parse_dataviz_blocks(response_text)
         charts = []
+        block_traces = []
+
         for _block_text, block_data in dataviz_blocks:
-            chart = await self._execute_dataviz_block(block_data, context)
+            chart, trace = await self._execute_dataviz_block(
+                block_data, context, collect_debug=debug
+            )
             if chart:
                 charts.append(chart)
+            if trace:
+                block_traces.append(trace)
 
         # Clean message text (remove dataviz blocks)
         clean_message = strip_dataviz_blocks(response_text)
@@ -246,7 +258,7 @@ class ChatService:
 
         await self.db.flush()
 
-        return {
+        result = {
             "conversation_id": conversation.id,
             "message": clean_message,
             "charts": charts,
@@ -255,25 +267,79 @@ class ChatService:
             },
         }
 
+        if debug:
+            result["debug"] = {
+                "llm_raw_response": response_text,
+                "dataviz_blocks_found": len(dataviz_blocks),
+                "account_scope": scope_account_ids,
+                "block_traces": block_traces,
+                "system_prompt_length": len(system_prompt),
+                "llm_duration_ms": round(llm_duration_ms, 1),
+            }
+
+        return result
+
     async def _execute_dataviz_block(
-        self, block: dict, context: QueryContext
-    ) -> dict | None:
-        """Execute a single dataviz block: run query, return {viz, data}."""
+        self, block: dict, context: QueryContext, collect_debug: bool = False
+    ) -> tuple[dict | None, dict | None]:
+        """Execute a single dataviz block: run query, return (chart, debug_trace).
+
+        Returns:
+            (chart_dict_or_None, debug_trace_dict_or_None)
+        """
         query_spec = block.get("query", {})
         viz_spec = block.get("viz", {})
+        trace = None
 
+        start = time.monotonic()
         try:
-            data, _col_names = await execute_query(self.db, query_spec, context)
-            return {
-                "viz": viz_spec,
-                "data": data,
-            }
+            data, _col_names, sql_text = await execute_query(
+                self.db, query_spec, context
+            )
+            duration_ms = (time.monotonic() - start) * 1000
+
+            if collect_debug:
+                trace = {
+                    "query": query_spec,
+                    "viz": viz_spec,
+                    "sql": sql_text,
+                    "row_count": len(data),
+                    "data_sample": data[:5],
+                    "error": None,
+                    "duration_ms": round(duration_ms, 1),
+                }
+
+            return {"viz": viz_spec, "data": data}, trace
+
         except QueryValidationError as e:
             logger.warning("dataviz_query_validation_error", error=str(e))
-            return None
+            duration_ms = (time.monotonic() - start) * 1000
+            if collect_debug:
+                trace = {
+                    "query": query_spec,
+                    "viz": viz_spec,
+                    "sql": None,
+                    "row_count": None,
+                    "data_sample": [],
+                    "error": f"Validation: {e}",
+                    "duration_ms": round(duration_ms, 1),
+                }
+            return None, trace
+
         except Exception as e:
             logger.error("dataviz_query_execution_error", error=str(e))
-            return None
+            duration_ms = (time.monotonic() - start) * 1000
+            if collect_debug:
+                trace = {
+                    "query": query_spec,
+                    "viz": viz_spec,
+                    "sql": None,
+                    "row_count": None,
+                    "data_sample": [],
+                    "error": f"Execution: {e}",
+                    "duration_ms": round(duration_ms, 1),
+                }
+            return None, trace
 
     async def _resolve_account_scope(
         self, user: User, account_ids: list[int] | None

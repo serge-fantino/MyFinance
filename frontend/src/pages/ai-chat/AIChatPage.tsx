@@ -17,11 +17,14 @@ import {
   Loader2,
   AlertCircle,
   ChevronLeft,
+  ChevronDown,
   Sparkles,
   Wallet,
   Check,
+  Bug,
 } from "lucide-react";
 import { aiService, Conversation, ConversationDetail, ChatResponse } from "../../services/ai.service";
+import type { DebugInfo } from "../../services/ai.service";
 import { accountService } from "../../services/account.service";
 import type { Account } from "../../types/account.types";
 import ChatChart from "../../components/chat/ChatChart";
@@ -32,6 +35,7 @@ interface DisplayMessage {
   role: "user" | "assistant";
   content: string;
   charts?: ChartResult[];
+  debugInfo?: DebugInfo | null;
   metadata?: Record<string, unknown>;
   created_at?: string;
 }
@@ -50,7 +54,142 @@ function renderMarkdown(text: string): string {
     .replace(/\n/g, "<br />");
 }
 
-function MessageBubble({ msg }: { msg: DisplayMessage }) {
+function DebugPanel({ debug }: { debug: DebugInfo }) {
+  const [open, setOpen] = useState(false);
+  const [expandedBlocks, setExpandedBlocks] = useState<Set<number>>(new Set());
+
+  const toggleBlock = (idx: number) => {
+    setExpandedBlocks((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
+
+  return (
+    <div className="mt-2 border border-amber-200 bg-amber-50/50 rounded-lg text-xs">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-1.5 px-3 py-1.5 text-amber-700 hover:bg-amber-100/50 transition-colors rounded-lg"
+      >
+        <Bug className="w-3 h-3" />
+        <span className="font-medium">Debug</span>
+        <span className="text-amber-500 ml-1">
+          {debug.dataviz_blocks_found} bloc{debug.dataviz_blocks_found !== 1 ? "s" : ""}
+          {" \u00b7 "}LLM {debug.llm_duration_ms ? `${(debug.llm_duration_ms / 1000).toFixed(1)}s` : "?"}
+          {" \u00b7 "}prompt {(debug.system_prompt_length / 1000).toFixed(1)}k chars
+        </span>
+        <ChevronDown className={`w-3 h-3 ml-auto transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="px-3 pb-3 space-y-3">
+          {/* Summary */}
+          <div className="flex flex-wrap gap-3 text-[11px] text-amber-700">
+            <span>Scope: {debug.account_scope.length} comptes (IDs: {debug.account_scope.join(", ")})</span>
+          </div>
+
+          {/* LLM raw response */}
+          <div>
+            <div className="font-medium text-amber-700 mb-1">R\u00e9ponse LLM brute :</div>
+            <pre className="bg-white border border-amber-200 rounded p-2 overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap text-[10px] text-gray-700">
+              {debug.llm_raw_response}
+            </pre>
+          </div>
+
+          {/* Block traces */}
+          {debug.block_traces.map((trace, idx) => (
+            <div key={idx} className="border border-amber-200 rounded-lg overflow-hidden">
+              <button
+                onClick={() => toggleBlock(idx)}
+                className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-amber-100/50 transition-colors ${
+                  trace.error ? "bg-red-50" : "bg-white"
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${trace.error ? "bg-red-500" : "bg-green-500"}`} />
+                <span className="font-medium text-amber-800">
+                  Bloc #{idx + 1}: {(trace.viz as Record<string, unknown>)?.chart as string || "?"} &mdash; {(trace.viz as Record<string, unknown>)?.title as string || "sans titre"}
+                </span>
+                {trace.row_count != null && (
+                  <span className="text-amber-500">{trace.row_count} lignes</span>
+                )}
+                {trace.duration_ms != null && (
+                  <span className="text-amber-500">{trace.duration_ms.toFixed(0)}ms</span>
+                )}
+                <ChevronDown className={`w-3 h-3 ml-auto transition-transform ${expandedBlocks.has(idx) ? "rotate-180" : ""}`} />
+              </button>
+
+              {expandedBlocks.has(idx) && (
+                <div className="px-2.5 pb-2.5 space-y-2 bg-white">
+                  {/* Query DSL */}
+                  <div>
+                    <div className="font-medium text-amber-700 mb-0.5">Query DSL :</div>
+                    <pre className="bg-gray-50 border rounded p-1.5 overflow-x-auto text-[10px] text-gray-700 max-h-32 overflow-y-auto">
+                      {JSON.stringify(trace.query, null, 2)}
+                    </pre>
+                  </div>
+
+                  {/* SQL */}
+                  {trace.sql && (
+                    <div>
+                      <div className="font-medium text-amber-700 mb-0.5">SQL compil\u00e9 :</div>
+                      <pre className="bg-gray-50 border rounded p-1.5 overflow-x-auto text-[10px] text-gray-700 max-h-32 overflow-y-auto">
+                        {trace.sql}
+                      </pre>
+                    </div>
+                  )}
+
+                  {/* Error */}
+                  {trace.error && (
+                    <div className="bg-red-50 border border-red-200 rounded p-1.5 text-red-700">
+                      {trace.error}
+                    </div>
+                  )}
+
+                  {/* Data sample */}
+                  {trace.data_sample.length > 0 && (
+                    <div>
+                      <div className="font-medium text-amber-700 mb-0.5">
+                        Donn\u00e9es ({trace.row_count} lignes, {trace.data_sample.length} affich\u00e9es) :
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="text-[10px] border-collapse">
+                          <thead>
+                            <tr>
+                              {Object.keys(trace.data_sample[0]).map((key) => (
+                                <th key={key} className="border border-gray-200 px-1.5 py-0.5 bg-gray-50 font-medium text-left">
+                                  {key}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {trace.data_sample.map((row, ri) => (
+                              <tr key={ri}>
+                                {Object.values(row).map((val, ci) => (
+                                  <td key={ci} className="border border-gray-200 px-1.5 py-0.5 text-gray-700">
+                                    {val == null ? <span className="text-gray-300">null</span> : String(val)}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MessageBubble({ msg, showDebug }: { msg: DisplayMessage; showDebug: boolean }) {
   const isUser = msg.role === "user";
 
   return (
@@ -82,6 +221,10 @@ function MessageBubble({ msg }: { msg: DisplayMessage }) {
             <ChatChart key={i} chart={chart} />
           ))}
         </div>
+        {/* Debug panel — outside the bubble, full width */}
+        {showDebug && msg.debugInfo && (
+          <DebugPanel debug={msg.debugInfo} />
+        )}
         {msg.created_at && (
           <div className="text-[10px] text-muted-foreground mt-1 px-1">
             {new Date(msg.created_at).toLocaleTimeString("fr-FR", {
@@ -115,6 +258,9 @@ export default function AIChatPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+
+  // Debug mode
+  const [debugMode, setDebugMode] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -258,6 +404,7 @@ export default function AIChatPage() {
           account_ids: selectedAccountIds.length < accounts.length
             ? selectedAccountIds
             : undefined, // undefined = all accounts (default)
+          debug: debugMode || undefined,
         });
 
         if (!activeConversation) {
@@ -268,6 +415,7 @@ export default function AIChatPage() {
           role: "assistant",
           content: response.message,
           charts: response.charts,
+          debugInfo: response.debug,
           metadata: response.metadata,
           created_at: new Date().toISOString(),
         };
@@ -288,7 +436,7 @@ export default function AIChatPage() {
         setLoading(false);
       }
     },
-    [input, loading, activeConversation, selectedAccountIds, accounts.length]
+    [input, loading, activeConversation, selectedAccountIds, accounts.length, debugMode]
   );
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -388,8 +536,22 @@ export default function AIChatPage() {
           <Sparkles className="w-4 h-4 text-blue-500" />
           <span className="font-medium text-sm">Assistant IA</span>
 
+          {/* Debug toggle */}
+          <button
+            onClick={() => setDebugMode(!debugMode)}
+            className={`ml-auto flex items-center gap-1 px-2 py-1.5 text-xs rounded-lg border transition-colors ${
+              debugMode
+                ? "bg-amber-100 border-amber-300 text-amber-700"
+                : "hover:bg-muted text-muted-foreground"
+            }`}
+            title={debugMode ? "Mode debug actif" : "Activer le mode debug"}
+          >
+            <Bug className="w-3.5 h-3.5" />
+            {debugMode && <span>Debug</span>}
+          </button>
+
           {/* Account scope selector */}
-          <div className="relative ml-auto" ref={accountMenuRef}>
+          <div className="relative" ref={accountMenuRef}>
             <button
               onClick={() => setAccountMenuOpen(!accountMenuOpen)}
               className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border hover:bg-muted transition-colors"
@@ -467,7 +629,7 @@ export default function AIChatPage() {
               </div>
             </div>
           ) : (
-            messages.map((msg, i) => <MessageBubble key={i} msg={msg} />)
+            messages.map((msg, i) => <MessageBubble key={i} msg={msg} showDebug={debugMode} />)
           )}
 
           {loading && (
