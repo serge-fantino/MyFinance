@@ -3,7 +3,6 @@
 Manages CRUD operations on rules and applies them to transactions.
 """
 
-import re
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +14,7 @@ from app.models.classification_rule import ClassificationRule
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.schemas.classification_rule import RuleCreate, RuleUpdate
+from app.utils.pattern_matching import matches_pattern
 
 logger = structlog.get_logger()
 
@@ -168,25 +168,47 @@ class RuleService:
 
         await self.db.flush()
 
-        # Auto-create persistent clusters for each rule that matched
+        # Create or merge into persistent clusters for each rule that matched
+        from app.models.transaction_cluster import TransactionCluster
         from app.services.cluster_service import ClusterService
         cluster_service = ClusterService(self.db)
         for rule in rules:
             matched_ids = rule_matches.get(rule.id, [])
             if not matched_ids:
                 continue
-            cluster_name = rule.custom_label or rule.pattern
-            await cluster_service.create_cluster(
-                user=user,
-                name=cluster_name,
-                transaction_ids=matched_ids,
-                account_id=account_id,
-                category_id=rule.category_id,
-                source="rule",
-                rule_id=rule.id,
-                rule_pattern=rule.pattern,
-                match_type=rule.match_type,
+
+            # Check if a cluster already exists for this rule
+            existing_result = await self.db.execute(
+                select(TransactionCluster).where(
+                    TransactionCluster.user_id == user.id,
+                    TransactionCluster.rule_id == rule.id,
+                )
             )
+            existing_cluster = existing_result.scalar_one_or_none()
+
+            if existing_cluster:
+                # Merge new transactions into the existing cluster
+                current_ids = set(existing_cluster.transaction_ids or [])
+                new_ids = list(current_ids | set(matched_ids))
+                await cluster_service.update_cluster(
+                    user=user,
+                    cluster_id=existing_cluster.id,
+                    transaction_ids=new_ids,
+                )
+            else:
+                # Create a new cluster linked to the rule
+                cluster_name = rule.custom_label or rule.pattern
+                await cluster_service.create_cluster(
+                    user=user,
+                    name=cluster_name,
+                    transaction_ids=matched_ids,
+                    account_id=account_id,
+                    category_id=rule.category_id,
+                    source="rule",
+                    rule_id=rule.id,
+                    rule_pattern=rule.pattern,
+                    match_type=rule.match_type,
+                )
 
         logger.info(
             "rules_applied",
@@ -280,31 +302,9 @@ class RuleService:
     def _matches(label: str, pattern: str, match_type: str) -> bool:
         """Check if a transaction label matches a rule pattern.
 
-        match_type:
-        - exact: label equals pattern
-        - starts_with: label starts with pattern
-        - regex: pattern is a regex (case-insensitive)
-        - contains: pattern in label. Use " % " to require multiple substrings (A % B = contains A AND B)
+        Delegates to shared matches_pattern utility.
         """
-        label_lower = label.lower()
-        pattern_stripped = pattern.strip()
-
-        if match_type == "regex":
-            try:
-                return bool(re.search(pattern_stripped, label, re.IGNORECASE))
-            except re.error:
-                return False
-
-        if match_type == "exact":
-            return label_lower == pattern_stripped.lower()
-        if match_type == "starts_with":
-            return label_lower.startswith(pattern_stripped.lower())
-
-        # contains (default) — support "A % B" for multiple (all must be in label)
-        if " % " in pattern_stripped:
-            parts = [p.strip() for p in pattern_stripped.split("%") if p.strip()]
-            return all(p.lower() in label_lower for p in parts)
-        return pattern_stripped.lower() in label_lower
+        return matches_pattern(label, pattern, match_type)
 
     async def _get_user_rule(self, rule_id: int, user: User) -> ClassificationRule:
         """Fetch a rule and verify ownership."""

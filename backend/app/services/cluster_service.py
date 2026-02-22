@@ -8,7 +8,6 @@ Manages persistent transaction clusters with computed statistics:
 """
 
 import math
-import re
 from collections import Counter
 from datetime import date, timedelta
 from decimal import Decimal
@@ -24,6 +23,7 @@ from app.models.classification_rule import ClassificationRule
 from app.models.transaction import Transaction
 from app.models.transaction_cluster import TransactionCluster
 from app.models.user import User
+from app.utils.pattern_matching import matches_pattern
 
 logger = structlog.get_logger()
 
@@ -365,29 +365,11 @@ class ClusterService:
 
     @staticmethod
     def _matches(label: str, pattern: str, match_type: str) -> bool:
-        """Check if a label matches a pattern (same logic as RuleService).
+        """Check if a label matches a pattern.
 
-        match_type: exact, starts_with, regex, or contains (with " % " for multiple).
+        Delegates to shared matches_pattern utility.
         """
-        label_lower = label.lower()
-        pattern_stripped = pattern.strip()
-
-        if match_type == "regex":
-            try:
-                return bool(re.search(pattern_stripped, label, re.IGNORECASE))
-            except re.error:
-                return False
-
-        if match_type == "exact":
-            return label_lower == pattern_stripped.lower()
-        if match_type == "starts_with":
-            return label_lower.startswith(pattern_stripped.lower())
-
-        # contains — support "A % B" for multiple (all must be in label)
-        if " % " in pattern_stripped:
-            parts = [p.strip() for p in pattern_stripped.split("%") if p.strip()]
-            return all(p.lower() in label_lower for p in parts)
-        return pattern_stripped.lower() in label_lower
+        return matches_pattern(label, pattern, match_type)
 
     async def validate_pattern(
         self, user: User, transaction_ids: list[int], rule_pattern: str, match_type: str = "contains"
