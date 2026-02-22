@@ -49,11 +49,8 @@ def upgrade() -> None:
         SET level = 3,
             level1_id = p.parent_id,
             level2_id = c.parent_id
-        WHERE c.parent_id IS NOT NULL
-          AND EXISTS (
-              SELECT 1 FROM categories p
-              WHERE p.id = c.parent_id AND p.parent_id IS NOT NULL
-          )
+        FROM categories p
+        WHERE p.id = c.parent_id AND p.parent_id IS NOT NULL
     """)
 
     # ── Transaction clusters table ────────────────────

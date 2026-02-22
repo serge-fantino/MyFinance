@@ -323,6 +323,9 @@ def _compile_select(query: DatavizQuery) -> tuple[Select, list[str]]:
             col_names.append(label)
     elif query.group_by or query.aggregates:
         # ---- AGGREGATE MODE: group_by + aggregates ----
+        # Collect group_by refs for ORDER BY validation
+        group_by_refs = set(query.group_by)
+
         for g in query.group_by:
             col_expr = _resolve_select_column(g, query.source)
             label = _col_label(g)
@@ -331,6 +334,23 @@ def _compile_select(query: DatavizQuery) -> tuple[Select, list[str]]:
             col_names.append(label)
             # Use the labeled column for GROUP BY so PostgreSQL gets identical expression
             group_by_cols.append(labeled)
+
+        # ORDER BY columns that are not aggregates must be in GROUP BY (PostgreSQL requirement)
+        for o in query.order_by:
+            if o.field in (agg.alias for agg in query.aggregates):
+                continue  # aggregate alias, no need to add to group_by
+            # Check if already in group_by (by label)
+            if _col_label(o.field) in (_col_label(g) for g in query.group_by):
+                continue
+            # Add to group_by so ORDER BY is valid
+            if o.field not in group_by_refs:
+                group_by_refs.add(o.field)
+                col_expr = _resolve_select_column(o.field, query.source)
+                label = _col_label(o.field)
+                labeled = col_expr.label(label)
+                columns.insert(len(group_by_cols), labeled)
+                col_names.insert(len(group_by_cols), label)
+                group_by_cols.append(labeled)
 
         for agg in query.aggregates:
             agg_expr = _compile_aggregate(agg, query.source)

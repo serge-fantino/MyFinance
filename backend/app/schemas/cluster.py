@@ -19,12 +19,35 @@ class ClusterUpdate(BaseModel):
     description: str | None = None
     category_id: int | None = None
     transaction_ids: list[int] | None = None
+    rule_pattern: str | None = None
+    match_type: str | None = None
 
 
 class ClusterFromProposal(BaseModel):
     proposal_cluster_id: int
     name: str | None = None
     category_id: int | None = None
+
+
+class MoveTransactionsRequest(BaseModel):
+    transaction_ids: list[int]
+    from_cluster_id: int
+
+
+class ValidatePatternRequest(BaseModel):
+    transaction_ids: list[int]
+    rule_pattern: str
+    match_type: str = "contains"  # contains, exact, starts_with
+
+
+class CreateFromSelectionRequest(BaseModel):
+    transaction_ids: list[int]
+    name: str
+    category_id: int | None = None
+    description: str | None = None
+    rule_pattern: str | None = None
+    match_type: str | None = "contains"  # contains, exact, starts_with
+    create_rule: bool = False  # If True, create a ClassificationRule and link it
 
 
 class ClusterResponse(BaseModel):
@@ -35,6 +58,7 @@ class ClusterResponse(BaseModel):
     description: str | None
     category_id: int | None
     source: str
+    proposal_cluster_id: int | None
     rule_id: int | None
     rule_pattern: str | None
     match_type: str | None

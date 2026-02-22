@@ -256,7 +256,7 @@ class ClassificationService:
             cluster.custom_label = custom_label
         await self.db.flush()
 
-        # Auto-create a persistent TransactionCluster
+        # Auto-create a persistent TransactionCluster (with lifetime link to proposal cluster)
         from app.services.cluster_service import ClusterService
         cluster_service = ClusterService(self.db)
         cluster_name = custom_label or cluster.representative_label
@@ -266,6 +266,7 @@ class ClassificationService:
             transaction_ids=transaction_ids,
             category_id=category_id,
             source="classification",
+            proposal_cluster_id=cluster.id,
             rule_pattern=rule_pattern,
             match_type="embedding",
         )

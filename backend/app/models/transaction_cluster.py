@@ -39,6 +39,11 @@ class TransactionCluster(Base, TimestampMixin):
     source: Mapped[str] = mapped_column(
         String(30), nullable=False, server_default="manual"
     )  # "classification", "rule", "manual"
+    proposal_cluster_id: Mapped[int | None] = mapped_column(
+        ForeignKey("classification_proposal_clusters.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     rule_id: Mapped[int | None] = mapped_column(
         ForeignKey("classification_rules.id", ondelete="SET NULL"), nullable=True
     )
@@ -83,6 +88,7 @@ class TransactionCluster(Base, TimestampMixin):
     user = relationship("User")
     account = relationship("Account")
     category = relationship("Category")
+    proposal_cluster = relationship("ClassificationProposalCluster", foreign_keys=[proposal_cluster_id])
     rule = relationship("ClassificationRule")
 
     __table_args__ = (

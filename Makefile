@@ -161,6 +161,7 @@ db-migrate: ## Create a new migration (usage: make db-migrate msg="add users tab
 
 db-upgrade: ## Apply all pending migrations
 	cd backend && ../$(ALEMBIC) upgrade head
+	@cd backend && echo "" && echo "Révision actuelle :" && ../$(ALEMBIC) current 2>/dev/null
 
 db-downgrade: ## Rollback last migration
 	cd backend && ../$(ALEMBIC) downgrade -1

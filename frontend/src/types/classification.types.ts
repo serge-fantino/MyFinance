@@ -44,6 +44,7 @@ export interface TransactionCluster {
   description: string | null;
   category_id: number | null;
   source: string;
+  proposal_cluster_id: number | null;
   rule_id: number | null;
   rule_pattern: string | null;
   match_type: string | null;

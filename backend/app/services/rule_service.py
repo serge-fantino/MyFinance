@@ -3,6 +3,7 @@
 Manages CRUD operations on rules and applies them to transactions.
 """
 
+import re
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -276,16 +277,33 @@ class RuleService:
 
     @staticmethod
     def _matches(label: str, pattern: str, match_type: str) -> bool:
-        """Check if a transaction label matches a rule pattern."""
+        """Check if a transaction label matches a rule pattern.
+
+        match_type:
+        - exact: label equals pattern
+        - starts_with: label starts with pattern
+        - regex: pattern is a regex (case-insensitive)
+        - contains: pattern in label. Use " % " to require multiple substrings (A % B = contains A AND B)
+        """
         label_lower = label.lower()
-        pattern_lower = pattern.lower()
+        pattern_stripped = pattern.strip()
+
+        if match_type == "regex":
+            try:
+                return bool(re.search(pattern_stripped, label, re.IGNORECASE))
+            except re.error:
+                return False
 
         if match_type == "exact":
-            return label_lower == pattern_lower
-        elif match_type == "starts_with":
-            return label_lower.startswith(pattern_lower)
-        else:  # contains (default)
-            return pattern_lower in label_lower
+            return label_lower == pattern_stripped.lower()
+        if match_type == "starts_with":
+            return label_lower.startswith(pattern_stripped.lower())
+
+        # contains (default) — support "A % B" for multiple (all must be in label)
+        if " % " in pattern_stripped:
+            parts = [p.strip() for p in pattern_stripped.split("%") if p.strip()]
+            return all(p.lower() in label_lower for p in parts)
+        return pattern_stripped.lower() in label_lower
 
     async def _get_user_rule(self, rule_id: int, user: User) -> ClassificationRule:
         """Fetch a rule and verify ownership."""

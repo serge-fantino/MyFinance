@@ -12,6 +12,7 @@ import SettingsPage from "./pages/settings/SettingsPage";
 import AnalyticsPage from "./pages/analytics/AnalyticsPage";
 import QueryPage from "./pages/query/QueryPage";
 import AIChatPage from "./pages/ai-chat/AIChatPage";
+import ClustersPage from "./pages/clusters/ClustersPage";
 
 function App() {
   return (
@@ -47,6 +48,7 @@ function App() {
           <Route path="/accounts" element={<AccountsPage />} />
           <Route path="/transactions" element={<TransactionsPage />} />
           <Route path="/classification" element={<ClassificationPage />} />
+          <Route path="/clusters" element={<ClustersPage />} />
 
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/query" element={<QueryPage />} />

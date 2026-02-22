@@ -5,8 +5,9 @@
  * Result: single panel with Graphique | JSON toggle, synchronized.
  *
  * Supports opening from AI chat via URL params: ?query=...&viz=... (base64 JSON)
+ * State is persisted to localStorage so it's restored when navigating back.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Play, Wallet, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { accountService } from "../../services/account.service";
@@ -36,6 +37,36 @@ const DEFAULT_VIZ = {
     color: { field: "category_name", type: "nominal" },
   },
 };
+
+const QUERY_PAGE_STORAGE_KEY = "myfinance_query_page_state";
+
+interface StoredQueryState {
+  query?: QueryState;
+  viz?: string;
+  selectedAccountIds?: number[];
+  queryMode?: "ux" | "json";
+  schemaOpen?: boolean;
+  schemaViewMode?: "json" | "lisible";
+  resultViewMode?: "graphique" | "json";
+}
+
+function loadStoredState(): StoredQueryState | null {
+  try {
+    const raw = localStorage.getItem(QUERY_PAGE_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as StoredQueryState;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredState(state: StoredQueryState) {
+  try {
+    localStorage.setItem(QUERY_PAGE_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    /* ignore */
+  }
+}
 
 function safeJsonParse<T>(str: string, fallback: T): T {
   try {
@@ -149,10 +180,19 @@ function MetamodelReadableView({ metamodel }: { metamodel: Metamodel }) {
 
 export default function QueryPage() {
   const [searchParams] = useSearchParams();
+  const stored = useRef(loadStoredState());
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>([]);
+  const [selectedAccountIds, setSelectedAccountIds] = useState<number[]>(() => {
+    const s = stored.current;
+    if (s?.selectedAccountIds?.length) return s.selectedAccountIds;
+    return [];
+  });
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
-  const [queryMode, setQueryMode] = useState<"ux" | "json">("ux");
+  const [queryMode, setQueryMode] = useState<"ux" | "json">(() => {
+    const s = stored.current;
+    if (s?.queryMode) return s.queryMode;
+    return "ux";
+  });
   const [queryObject, setQueryObject] = useState<QueryState>(() => {
     const q = searchParams.get("query");
     if (q) {
@@ -163,6 +203,8 @@ export default function QueryPage() {
         return DEFAULT_QUERY;
       }
     }
+    const s = stored.current;
+    if (s?.query) return s.query;
     return DEFAULT_QUERY;
   });
   const [vizJson, setVizJson] = useState(() => {
@@ -175,20 +217,35 @@ export default function QueryPage() {
         return JSON.stringify(DEFAULT_VIZ, null, 2);
       }
     }
+    const s = stored.current;
+    if (s?.viz) return s.viz;
     return JSON.stringify(DEFAULT_VIZ, null, 2);
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chartResult, setChartResult] = useState<ChartResult | null>(null);
-  const [schemaOpen, setSchemaOpen] = useState(false);
-  const [schemaViewMode, setSchemaViewMode] = useState<"json" | "lisible">("lisible");
+  const [schemaOpen, setSchemaOpen] = useState(() => {
+    const s = stored.current;
+    return s?.schemaOpen ?? false;
+  });
+  const [schemaViewMode, setSchemaViewMode] = useState<"json" | "lisible">(() => {
+    const s = stored.current;
+    return s?.schemaViewMode ?? "lisible";
+  });
   const [metamodel, setMetamodel] = useState<Metamodel | null>(null);
-  const [resultViewMode, setResultViewMode] = useState<"graphique" | "json">("graphique");
+  const [resultViewMode, setResultViewMode] = useState<"graphique" | "json">(() => {
+    const s = stored.current;
+    return s?.resultViewMode ?? "graphique";
+  });
 
   useEffect(() => {
     accountService.list().then((data) => {
       setAccounts(data);
-      setSelectedAccountIds(data.map((a) => a.id));
+      setSelectedAccountIds((prev) => {
+        if (prev.length === 0) return data.map((a) => a.id);
+        const valid = prev.filter((id) => data.some((a) => a.id === id));
+        return valid.length > 0 ? valid : data.map((a) => a.id);
+      });
     });
   }, []);
 
@@ -197,6 +254,19 @@ export default function QueryPage() {
       queryService.getMetamodel().then(setMetamodel);
     }
   }, [metamodel]);
+
+  // Persist state to localStorage so it's restored when navigating back
+  useEffect(() => {
+    saveStoredState({
+      query: queryObject,
+      viz: vizJson,
+      selectedAccountIds,
+      queryMode,
+      schemaOpen,
+      schemaViewMode,
+      resultViewMode,
+    });
+  }, [queryObject, vizJson, selectedAccountIds, queryMode, schemaOpen, schemaViewMode, resultViewMode]);
 
   // Sync vizJson from chartResult when we get a new result (so JSON view shows the exact viz used)
   useEffect(() => {

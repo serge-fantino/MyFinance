@@ -11,6 +11,9 @@ from app.schemas.cluster import (
     ClusterResponse,
     ClusterTransactionResponse,
     ClusterUpdate,
+    CreateFromSelectionRequest,
+    MoveTransactionsRequest,
+    ValidatePatternRequest,
 )
 from app.services.cluster_service import ClusterService
 
@@ -27,6 +30,54 @@ async def list_clusters(
     """List transaction clusters, optionally filtered by account or category."""
     service = ClusterService(db)
     return await service.list_clusters(current_user, account_id, category_id)
+
+
+@router.get("/suggest-pattern")
+async def suggest_pattern(
+    transaction_ids: str,  # comma-separated
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Suggest a rule pattern from selected transaction labels (classification logic)."""
+    try:
+        ids = [int(x.strip()) for x in transaction_ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="transaction_ids invalides")
+    service = ClusterService(db)
+    result = await service.suggest_pattern_for_transactions(current_user, ids)
+    return result or {"suggested_pattern": "", "match_type": "contains"}
+
+
+@router.get("/suggest-name")
+async def suggest_name(
+    transaction_ids: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Suggest a cluster name from transactions (representative label + recurrence)."""
+    try:
+        ids = [int(x.strip()) for x in transaction_ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="transaction_ids invalides")
+    service = ClusterService(db)
+    result = await service.suggest_cluster_name(current_user, ids)
+    return result or {"suggested_name": ""}
+
+
+@router.post("/validate-pattern")
+async def validate_pattern(
+    data: ValidatePatternRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Validate that a pattern matches the selected transactions. No regex — simple substring match."""
+    service = ClusterService(db)
+    return await service.validate_pattern(
+        user=current_user,
+        transaction_ids=data.transaction_ids,
+        rule_pattern=data.rule_pattern,
+        match_type=data.match_type,
+    )
 
 
 @router.get("/{cluster_id}", response_model=ClusterResponse)
@@ -83,6 +134,29 @@ async def create_from_proposal(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.post("/from-selection", response_model=ClusterResponse, status_code=201)
+async def create_from_selection(
+    data: CreateFromSelectionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a cluster from selected transactions (removes them from source clusters)."""
+    service = ClusterService(db)
+    try:
+        return await service.create_cluster_from_selection(
+            user=current_user,
+            transaction_ids=data.transaction_ids,
+            name=data.name,
+            category_id=data.category_id,
+            description=data.description,
+            rule_pattern=data.rule_pattern,
+            match_type=data.match_type,
+            create_rule=data.create_rule,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.patch("/{cluster_id}", response_model=ClusterResponse)
 async def update_cluster(
     cluster_id: int,
@@ -99,6 +173,8 @@ async def update_cluster(
         description=data.description,
         category_id=data.category_id,
         transaction_ids=data.transaction_ids,
+        rule_pattern=data.rule_pattern,
+        match_type=data.match_type,
     )
     if not result:
         raise HTTPException(status_code=404, detail="Cluster introuvable")
@@ -127,6 +203,29 @@ async def recompute_statistics(
     """Force recomputation of cluster statistics."""
     service = ClusterService(db)
     result = await service.recompute_cluster_stats(current_user, cluster_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Cluster introuvable")
+    return result
+
+
+@router.post("/{cluster_id}/move-transactions", response_model=ClusterResponse)
+async def move_transactions(
+    cluster_id: int,
+    data: MoveTransactionsRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Move transactions from one cluster to another."""
+    service = ClusterService(db)
+    try:
+        result = await service.move_transactions(
+            user=current_user,
+            target_cluster_id=cluster_id,
+            transaction_ids=data.transaction_ids,
+            from_cluster_id=data.from_cluster_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not result:
         raise HTTPException(status_code=404, detail="Cluster introuvable")
     return result

@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import { Alert } from "../../components/ui/Alert";
 import { classificationService } from "../../services/classification.service";
+import { clusterService } from "../../services/cluster.service";
 import { transactionService } from "../../services/transaction.service";
 import { accountService } from "../../services/account.service";
 import { categoryService } from "../../services/category.service";
@@ -11,6 +12,7 @@ import type {
   ClassificationProposalResponse,
   ClassificationClusterResponse,
   ReclusterDebug,
+  TransactionCluster,
 } from "../../types/classification.types";
 import type { InterpretClusterResult } from "../../types/transaction.types";
 import type { Account } from "../../types/account.types";
@@ -35,6 +37,7 @@ const CONFIDENCE_COLORS: Record<string, string> = {
 const CLASSIFICATION_ACCOUNT_KEY = "classification_last_account_id";
 
 export default function ClassificationPage() {
+  const [searchParams] = useSearchParams();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [accountId, setAccountId] = useState<string>("");
@@ -50,6 +53,8 @@ export default function ClassificationPage() {
     Record<number, InterpretClusterResult | "loading">
   >({});
   const [llmUiEnabled, setLlmUiEnabled] = useState(false);
+  const [persistedClusters, setPersistedClusters] = useState<TransactionCluster[]>([]);
+  const [savingClusterId, setSavingClusterId] = useState<number | null>(null);
   const patchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingPatchRef = useRef<Map<number, Record<string, unknown>>>(new Map());
 
@@ -64,6 +69,11 @@ export default function ClassificationPage() {
         setAccounts(list);
         if (list.length > 0) {
           setAccountId((prev) => {
+            const urlAccountId = searchParams.get("account_id");
+            if (urlAccountId) {
+              const id = parseInt(urlAccountId, 10);
+              if (list.some((a) => a.id === id)) return urlAccountId;
+            }
             const stored = localStorage.getItem(CLASSIFICATION_ACCOUNT_KEY);
             const storedId = stored ? parseInt(stored, 10) : NaN;
             const found = list.some((a) => a.id === storedId);
@@ -75,7 +85,7 @@ export default function ClassificationPage() {
       })
       .catch(() => {});
     fetchCategories();
-  }, [fetchCategories]);
+  }, [fetchCategories, searchParams]);
 
   useEffect(() => {
     if (accountId) {
@@ -86,6 +96,24 @@ export default function ClassificationPage() {
       }
     }
   }, [accountId]);
+
+  const fetchPersistedClusters = useCallback(async () => {
+    const aid = accountId ? parseInt(accountId) : null;
+    if (!aid) {
+      setPersistedClusters([]);
+      return;
+    }
+    try {
+      const list = await clusterService.list(aid);
+      setPersistedClusters(list);
+    } catch {
+      setPersistedClusters([]);
+    }
+  }, [accountId]);
+
+  useEffect(() => {
+    fetchPersistedClusters();
+  }, [fetchPersistedClusters]);
 
   useEffect(() => {
     transactionService
@@ -203,6 +231,14 @@ export default function ClassificationPage() {
     setProcessing(cluster.cluster_id);
     setError(null);
     try {
+      const pending = pendingPatchRef.current.get(cluster.cluster_id);
+      const effectiveRulePattern =
+        (pending?.rule_pattern !== undefined ? pending.rule_pattern : cluster.rule_pattern || cluster.representative_label) ||
+        undefined;
+      const effectiveCustomLabel =
+        (pending?.custom_label !== undefined ? pending.custom_label : cluster.custom_label || cluster.representative_label) ||
+        undefined;
+
       // Flush any pending patch before apply so backend has latest state
       if (patchDebounceRef.current) {
         clearTimeout(patchDebounceRef.current);
@@ -225,14 +261,17 @@ export default function ClassificationPage() {
         transaction_ids: idsToClassify,
         category_id: categoryId,
         create_rule: true,
-        rule_pattern: cluster.rule_pattern || undefined,
-        custom_label: cluster.custom_label || undefined,
+        rule_pattern: effectiveRulePattern,
+        custom_label: effectiveCustomLabel,
       });
 
-      // Reload proposal to ensure UI is in sync with backend
+      // Reload proposal and persisted clusters
       const aid = accountId ? parseInt(accountId) : null;
       if (aid) {
-        const updated = await classificationService.getProposal(aid);
+        const [updated] = await Promise.all([
+          classificationService.getProposal(aid),
+          fetchPersistedClusters(),
+        ]);
         if (updated) setProposal(updated);
       } else {
         setProposal((prev) =>
@@ -263,6 +302,50 @@ export default function ClassificationPage() {
     patchCluster(clusterId, { status: "skipped" });
   };
 
+  const handleSaveToCluster = async (cluster: ClassificationClusterResponse) => {
+    setSavingClusterId(cluster.cluster_id);
+    setError(null);
+    try {
+      const pending = pendingPatchRef.current.get(cluster.cluster_id);
+      const effectiveCustomLabel =
+        (pending?.custom_label !== undefined ? pending.custom_label : cluster.custom_label || cluster.representative_label) ||
+        undefined;
+
+      // Flush pending patches so createFromProposal reads up-to-date rule_pattern/custom_label from DB
+      if (patchDebounceRef.current) {
+        clearTimeout(patchDebounceRef.current);
+        patchDebounceRef.current = null;
+        const aid = accountId ? parseInt(accountId) : 0;
+        if (aid && proposal) {
+          const clusterUpdates = Array.from(pendingPatchRef.current.entries()).map(([cid, u]) => ({
+            cluster_id: cid,
+            ...u,
+          }));
+          pendingPatchRef.current.clear();
+          if (clusterUpdates.length > 0) {
+            const updated = await classificationService.patchProposal(aid, clusterUpdates);
+            if (updated) setProposal(updated);
+          }
+        }
+      }
+
+      await clusterService.createFromProposal({
+        proposal_cluster_id: cluster.cluster_id,
+        name: effectiveCustomLabel || cluster.representative_label,
+        category_id: cluster.override_category_id ?? cluster.suggested_category_id ?? undefined,
+      });
+      await fetchPersistedClusters();
+    } catch (e) {
+      const msg =
+        e && typeof e === "object" && "response" in e && e.response && typeof e.response === "object" && "data" in e.response
+          ? (e.response as { data?: { detail?: string } }).data?.detail
+          : null;
+      setError(msg || `Erreur lors de la sauvegarde du cluster "${cluster.representative_label}".`);
+    } finally {
+      setSavingClusterId(null);
+    }
+  };
+
   const handleModifyAccepted = async (
     cluster: ClassificationClusterResponse,
     newCategoryId: number
@@ -271,6 +354,14 @@ export default function ClassificationPage() {
     const idsToClassify = cluster.transaction_ids.filter((id) => !excluded.has(id));
     if (idsToClassify.length === 0) return;
 
+    const pending = pendingPatchRef.current.get(cluster.cluster_id);
+    const effectiveRulePattern =
+      (pending?.rule_pattern !== undefined ? pending.rule_pattern : cluster.rule_pattern || cluster.representative_label) ||
+      undefined;
+    const effectiveCustomLabel =
+      (pending?.custom_label !== undefined ? pending.custom_label : cluster.custom_label || cluster.representative_label) ||
+      undefined;
+
     setProcessing(cluster.cluster_id);
     setError(null);
     try {
@@ -278,12 +369,15 @@ export default function ClassificationPage() {
         transaction_ids: idsToClassify,
         category_id: newCategoryId,
         create_rule: true,
-        rule_pattern: cluster.rule_pattern || undefined,
-        custom_label: cluster.custom_label || undefined,
+        rule_pattern: effectiveRulePattern,
+        custom_label: effectiveCustomLabel,
       });
       const aid = accountId ? parseInt(accountId) : null;
       if (aid) {
-        const updated = await classificationService.getProposal(aid);
+        const [updated] = await Promise.all([
+          classificationService.getProposal(aid),
+          fetchPersistedClusters(),
+        ]);
         if (updated) setProposal(updated);
       }
     } catch (e) {
@@ -610,9 +704,11 @@ export default function ClassificationPage() {
                           flatCategories={flatCategories}
                           interpretResult={interpretResults[cluster.cluster_id]}
                           isProcessing={processing === cluster.cluster_id}
+                          isSaving={savingClusterId === cluster.cluster_id}
                           llmUiEnabled={llmUiEnabled}
                           onAccept={() => handleAccept(cluster)}
                           onSkip={() => handleSkip(cluster.cluster_id)}
+                          onSaveToCluster={() => handleSaveToCluster(cluster)}
                           onOverrideCategory={(catId) => handleOverrideCategory(cluster.cluster_id, catId)}
                           onApplyLlmSuggestion={() => handleApplyLlmSuggestion(cluster)}
                           onInterpret={() => handleInterpret(cluster)}
@@ -637,11 +733,26 @@ export default function ClassificationPage() {
                   {sortedClusters
                     .filter((c) => c.status === "skipped")
                     .map((cluster) => (
-                      <div key={cluster.cluster_id} className="rounded-lg border p-3 bg-muted/30">
-                        <div className="flex items-center justify-between">
+                      <div
+                        key={cluster.cluster_id}
+                        className="rounded-lg border p-3 bg-muted/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                      >
+                        <div>
                           <span className="text-sm font-medium">{cluster.representative_label}</span>
-                          <span className="text-xs text-muted-foreground">Ignoré</span>
+                          <span className="text-xs text-muted-foreground ml-2">
+                            {cluster.transaction_count} tx · {formatCurrency(cluster.total_amount_abs)}
+                          </span>
                         </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={savingClusterId === cluster.cluster_id}
+                          isLoading={savingClusterId === cluster.cluster_id}
+                          onClick={() => handleSaveToCluster(cluster)}
+                          title="Enregistrer ce regroupement dans la table des clusters"
+                        >
+                          Sauvegarder en cluster
+                        </Button>
                       </div>
                     ))}
                 </div>
@@ -654,6 +765,15 @@ export default function ClassificationPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Persisted clusters (transaction_clusters) for this account */}
+      {accountId && (
+        <PersistedClustersSection
+          clusters={persistedClusters}
+          flatCategories={flatCategories}
+          onRefresh={fetchPersistedClusters}
+        />
       )}
 
       {/* Proposal exists but empty clusters */}
@@ -781,9 +901,11 @@ function ClusterCard({
   flatCategories,
   interpretResult,
   isProcessing,
+  isSaving,
   llmUiEnabled,
   onAccept,
   onSkip,
+  onSaveToCluster,
   onOverrideCategory,
   onApplyLlmSuggestion,
   onInterpret,
@@ -801,9 +923,11 @@ function ClusterCard({
   flatCategories: { id: number; name: string; parentName: string | null; depth: number }[];
   interpretResult: InterpretClusterResult | "loading" | undefined;
   isProcessing: boolean;
+  isSaving?: boolean;
   llmUiEnabled: boolean;
   onAccept: () => void;
   onSkip: () => void;
+  onSaveToCluster: () => void;
   onOverrideCategory: (catId: number | null) => void;
   onApplyLlmSuggestion: () => void;
   onInterpret: () => void;
@@ -886,6 +1010,16 @@ function ClusterCard({
             onClick={onAccept}
           >
             Appliquer
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isProcessing || isSaving}
+            isLoading={isSaving}
+            onClick={onSaveToCluster}
+            title="Enregistrer ce regroupement dans la table des clusters (sans classifier)"
+          >
+            Sauvegarder en cluster
           </Button>
           <Button variant="ghost" size="sm" disabled={isProcessing} onClick={onSkip}>
             Ignorer
@@ -979,8 +1113,12 @@ function ClusterCard({
                 <label className="text-xs text-muted-foreground">Motif règle</label>
                 <input
                   type="text"
-                  placeholder={cluster.representative_label}
-                  value={pendingRulePattern !== undefined ? (pendingRulePattern ?? "") : (cluster.rule_pattern ?? "")}
+                  placeholder="Ex: AMAZON, CARTE 1234..."
+                  value={
+                    pendingRulePattern !== undefined
+                      ? (pendingRulePattern ?? "")
+                      : (cluster.rule_pattern || cluster.representative_label || "")
+                  }
                   onChange={(e) => onRulePatternChange(e.target.value)}
                   className="w-full rounded border border-input bg-background px-2 py-1 text-sm mt-0.5"
                 />
@@ -990,7 +1128,11 @@ function ClusterCard({
                 <input
                   type="text"
                   placeholder="Ex: Amazon"
-                  value={pendingCustomLabel !== undefined ? (pendingCustomLabel ?? "") : (cluster.custom_label ?? "")}
+                  value={
+                    pendingCustomLabel !== undefined
+                      ? (pendingCustomLabel ?? "")
+                      : (cluster.custom_label || cluster.representative_label || "")
+                  }
                   onChange={(e) => onCustomLabelChange(e.target.value)}
                   className="w-full rounded border border-input bg-background px-2 py-1 text-sm mt-0.5"
                 />
@@ -999,6 +1141,101 @@ function ClusterCard({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Persisted clusters section (transaction_clusters table) ────────────────
+
+function PersistedClustersSection({
+  clusters,
+  flatCategories,
+  onRefresh,
+}: {
+  clusters: TransactionCluster[];
+  flatCategories: { id: number; name: string; parentName: string | null; depth: number }[];
+  onRefresh: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  const handleDelete = async (id: number) => {
+    setDeletingId(id);
+    try {
+      await clusterService.delete(id);
+      onRefresh();
+    } catch {
+      /* ignore */
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border bg-card overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-muted/30 transition-colors"
+      >
+        <span className="text-sm font-medium">
+          Clusters enregistrés ({clusters.length})
+        </span>
+        <span className="text-xs text-muted-foreground">
+          Table transaction_clusters
+        </span>
+        <svg
+          className={`w-4 h-4 transition-transform ${expanded ? "rotate-180" : ""}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {expanded && (
+        <div className="border-t p-4 space-y-3">
+          {clusters.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Aucun cluster enregistré. Utilisez « Sauvegarder en cluster » sur un regroupement pour l&apos;enregistrer.
+            </p>
+          ) : (
+            clusters.map((c) => {
+              const catName =
+                c.category_id != null
+                  ? flatCategories.find((f) => f.id === c.category_id)?.name ?? "?"
+                  : null;
+              return (
+                <div
+                  key={c.id}
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border p-3 bg-muted/20"
+                >
+                  <div>
+                    <span className="font-medium text-sm">{c.name}</span>
+                    <span className="text-xs text-muted-foreground ml-2">
+                      {c.transaction_count} tx · {c.total_amount_abs != null ? formatCurrency(c.total_amount_abs) : "—"}
+                    </span>
+                    {catName && (
+                      <span className="text-xs text-emerald-600 dark:text-emerald-400 ml-2">
+                        → {catName}
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive"
+                    disabled={deletingId === c.id}
+                    onClick={() => handleDelete(c.id)}
+                  >
+                    Supprimer
+                  </Button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
     </div>
   );
 }
