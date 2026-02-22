@@ -14,7 +14,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 import structlog
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -127,6 +127,18 @@ class ClusterService:
         await self.db.flush()
         await self.db.refresh(cluster)
 
+        # Link transactions to this cluster (avoid re-classifying)
+        user_accounts = select(Account.id).where(Account.user_id == user.id)
+        stmt = (
+            update(Transaction)
+            .where(
+                Transaction.id.in_(transaction_ids),
+                Transaction.account_id.in_(user_accounts),
+            )
+            .values(cluster_id=cluster.id)
+        )
+        await self.db.execute(stmt)
+
         # Compute statistics from actual transactions
         await self._recompute_statistics(cluster, user)
         await self.db.flush()
@@ -144,8 +156,12 @@ class ClusterService:
         transaction_ids: list[int] | None = None,
         rule_pattern: str | None = None,
         match_type: str | None = None,
+        create_rule: bool = False,
     ) -> dict | None:
-        """Update a cluster. Recomputes stats if transactions changed."""
+        """Update a cluster. Recomputes stats if transactions changed.
+        When rule_pattern/match_type/category/name are updated and cluster has rule_id,
+        syncs the linked ClassificationRule. When create_rule=True and pattern+category set,
+        creates a new rule and links it."""
         cluster = await self._get_user_cluster(user, cluster_id)
         if not cluster:
             return None
@@ -161,8 +177,60 @@ class ClusterService:
         if match_type is not None:
             cluster.match_type = match_type or None
 
+        # Sync or create linked ClassificationRule
+        pattern = cluster.rule_pattern or ""
+        cat_id = cluster.category_id
+        if pattern and cat_id:
+            if cluster.rule_id:
+                # Update existing rule to match cluster
+                rule = await self.db.get(ClassificationRule, cluster.rule_id)
+                if rule and rule.user_id == user.id:
+                    rule.pattern = pattern
+                    rule.match_type = cluster.match_type or "contains"
+                    rule.category_id = cat_id
+                    rule.custom_label = cluster.name or None
+            elif create_rule:
+                # Create new rule and link
+                rule = ClassificationRule(
+                    user_id=user.id,
+                    pattern=pattern,
+                    match_type=cluster.match_type or "contains",
+                    category_id=cat_id,
+                    custom_label=cluster.name or None,
+                    is_active=True,
+                    created_by="manual",
+                )
+                self.db.add(rule)
+                await self.db.flush()
+                await self.db.refresh(rule)
+                cluster.rule_id = rule.id
+
         recompute = False
         if transaction_ids is not None:
+            old_ids = set(cluster.transaction_ids or [])
+            new_ids = set(transaction_ids)
+            removed = old_ids - new_ids
+            added = new_ids - old_ids
+            user_accounts = select(Account.id).where(Account.user_id == user.id)
+            if removed:
+                await self.db.execute(
+                    update(Transaction)
+                    .where(
+                        Transaction.id.in_(removed),
+                        Transaction.account_id.in_(user_accounts),
+                        Transaction.cluster_id == cluster.id,
+                    )
+                    .values(cluster_id=None)
+                )
+            if added:
+                await self.db.execute(
+                    update(Transaction)
+                    .where(
+                        Transaction.id.in_(added),
+                        Transaction.account_id.in_(user_accounts),
+                    )
+                    .values(cluster_id=cluster.id)
+                )
             cluster.transaction_ids = transaction_ids
             cluster.transaction_count = len(transaction_ids)
             recompute = True
@@ -417,6 +485,17 @@ class ClusterService:
         target.transaction_ids = new_target_ids
         target.transaction_count = len(new_target_ids)
 
+        # Update transaction.cluster_id: moved txns now belong to target
+        user_accounts = select(Account.id).where(Account.user_id == user.id)
+        await self.db.execute(
+            update(Transaction)
+            .where(
+                Transaction.id.in_(txn_ids),
+                Transaction.account_id.in_(user_accounts),
+            )
+            .values(cluster_id=target.id)
+        )
+
         await self.db.flush()
 
         await self._recompute_statistics(source, user)
@@ -490,10 +569,21 @@ class ClusterService:
             rule_id = rule.id
 
         # Remove transactions from source clusters
-        for cluster in source_clusters:
-            new_ids = [x for x in (cluster.transaction_ids or []) if x not in txn_set]
-            cluster.transaction_ids = new_ids
-            cluster.transaction_count = len(new_ids)
+        user_accounts = select(Account.id).where(Account.user_id == user.id)
+        for c in source_clusters:
+            new_ids = [x for x in (c.transaction_ids or []) if x not in txn_set]
+            c.transaction_ids = new_ids
+            c.transaction_count = len(new_ids)
+
+        # Clear cluster_id for moved transactions (will be set to new cluster)
+        await self.db.execute(
+            update(Transaction)
+            .where(
+                Transaction.id.in_(txn_set),
+                Transaction.account_id.in_(user_accounts),
+            )
+            .values(cluster_id=None)
+        )
 
         await self.db.flush()
 
@@ -514,6 +604,16 @@ class ClusterService:
         self.db.add(cluster)
         await self.db.flush()
         await self.db.refresh(cluster)
+
+        # Link transactions to new cluster
+        await self.db.execute(
+            update(Transaction)
+            .where(
+                Transaction.id.in_(transaction_ids),
+                Transaction.account_id.in_(user_accounts),
+            )
+            .values(cluster_id=cluster.id)
+        )
 
         await self._recompute_statistics(cluster, user)
         for c in source_clusters:

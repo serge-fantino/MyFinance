@@ -2,6 +2,7 @@
  * Authentication API service.
  */
 import api from "./api";
+import { getFingerprint, getDeviceInfo } from "../utils/fingerprint";
 import type { AuthResponse, LoginRequest, RegisterRequest, User } from "../types/auth.types";
 
 function storeTokens(authResponse: AuthResponse): void {
@@ -11,16 +12,22 @@ function storeTokens(authResponse: AuthResponse): void {
   api.defaults.headers.common.Authorization = `Bearer ${authResponse.access_token}`;
 }
 
+/** Headers sent on login/register for session tracking (fingerprint + device info). */
+const sessionHeaders = () => ({
+  "X-Client-Fingerprint": getFingerprint(),
+  "X-Device-Info": getDeviceInfo().summary,
+});
+
 export const authService = {
   async register(data: RegisterRequest): Promise<AuthResponse> {
-    const response = await api.post("/auth/register", data);
+    const response = await api.post("/auth/register", data, { headers: sessionHeaders() });
     const authData: AuthResponse = response.data;
     storeTokens(authData);
     return authData;
   },
 
   async login(data: LoginRequest): Promise<AuthResponse> {
-    const response = await api.post("/auth/login", data);
+    const response = await api.post("/auth/login", data, { headers: sessionHeaders() });
     const authData: AuthResponse = response.data;
     storeTokens(authData);
     return authData;

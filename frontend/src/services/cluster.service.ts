@@ -36,6 +36,7 @@ export const clusterService = {
       category_id?: number | null;
       rule_pattern?: string | null;
       match_type?: string | null;
+      create_rule?: boolean;
     }
   ): Promise<TransactionCluster> {
     const response = await api.patch<TransactionCluster>(`/clusters/${clusterId}`, data);

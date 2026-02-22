@@ -1,14 +1,15 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Button } from "../../components/ui/Button";
 import { Alert } from "../../components/ui/Alert";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/Card";
 import { categoryService } from "../../services/category.service";
 import { ruleService } from "../../services/rule.service";
+import { exportImportService } from "../../services/exportImport.service";
 import type { Category } from "../../types/category.types";
 import type { ClassificationRule } from "../../types/rule.types";
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<"categories" | "rules">("categories");
+  const [tab, setTab] = useState<"categories" | "rules" | "export">("categories");
 
   return (
     <div className="space-y-6">
@@ -21,7 +22,7 @@ export default function SettingsPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 border-b">
-        {(["categories", "rules"] as const).map((t) => (
+        {(["categories", "rules", "export"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -31,13 +32,14 @@ export default function SettingsPage() {
                 : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
-            {t === "categories" ? "Catégories" : "Règles de classification"}
+            {t === "categories" ? "Catégories" : t === "rules" ? "Règles de classification" : "Export / Import"}
           </button>
         ))}
       </div>
 
       {tab === "categories" && <CategoriesManager />}
       {tab === "rules" && <RulesManager />}
+      {tab === "export" && <ExportImportManager onImportSuccess={() => setTab("rules")} />}
     </div>
   );
 }
@@ -346,6 +348,7 @@ function RulesManager() {
     contains: "contient",
     exact: "exact",
     starts_with: "commence par",
+    regex: "regex",
   };
 
   return (
@@ -395,6 +398,7 @@ function RulesManager() {
                             <option value="contains">Contient</option>
                             <option value="exact">Exact</option>
                             <option value="starts_with">Commence par</option>
+                            <option value="regex">Regex</option>
                           </select>
                         </div>
                         <div>
@@ -482,6 +486,141 @@ function RulesManager() {
               ))}
             </div>
           )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/* ===========================================================================
+   Export / Import Manager
+   =========================================================================== */
+
+function ExportImportManager({ onImportSuccess }: { onImportSuccess?: () => void }) {
+  const [exporting, setExporting] = useState(false);
+  const [importContent, setImportContent] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{
+    categories_created: number;
+    rules_created: number;
+    rules_skipped: number;
+  } | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleExport = async () => {
+    setExporting(true);
+    setImportError(null);
+    try {
+      await exportImportService.export();
+    } catch {
+      setImportError("Erreur lors de l'export.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleImport = async () => {
+    if (!importContent.trim()) return;
+    setImporting(true);
+    setImportError(null);
+    setImportResult(null);
+    try {
+      const result = await exportImportService.import(importContent.trim());
+      setImportResult(result);
+      setImportContent("");
+      onImportSuccess?.();
+    } catch (e: unknown) {
+      const msg =
+        e && typeof e === "object" && "response" in e && e.response && typeof e.response === "object" && "data" in e.response
+          ? (e.response as { data?: { detail?: string } }).data?.detail
+          : null;
+      setImportError(msg || "Erreur lors de l'import.");
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setImportContent(String(reader.result ?? ""));
+      setImportError(null);
+      setImportResult(null);
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Export / Import</CardTitle>
+          <p className="text-sm text-muted-foreground mt-1">
+            Exportez ou importez vos catégories personnelles et règles de classification au format YAML.
+            Utile pour recréer un compte, partager des règles, ou sauvegarder.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {importError && <Alert variant="destructive">{importError}</Alert>}
+          {importResult && (
+            <Alert variant="default" className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
+              Import réussi : {importResult.categories_created} catégorie(s) créée(s), {importResult.rules_created} règle(s)
+              créée(s)
+              {importResult.rules_skipped > 0 && `, ${importResult.rules_skipped} règle(s) ignorée(s)`}.
+            </Alert>
+          )}
+
+          <div>
+            <h3 className="text-sm font-medium mb-2">Exporter</h3>
+            <p className="text-xs text-muted-foreground mb-2">
+              Télécharge un fichier YAML contenant vos catégories personnelles et règles.
+            </p>
+            <Button variant="outline" onClick={handleExport} disabled={exporting} isLoading={exporting}>
+              Télécharger l&apos;export
+            </Button>
+          </div>
+
+          <div className="border-t pt-6">
+            <h3 className="text-sm font-medium mb-2">Importer</h3>
+            <p className="text-xs text-muted-foreground mb-2">
+              Collez le contenu YAML ou sélectionnez un fichier. Les éléments sont fusionnés (pas de remplacement).
+            </p>
+            <div className="flex gap-2 mb-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".yaml,.yml,text/yaml,text/plain"
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+              <Button
+                variant="outline"
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Choisir un fichier
+              </Button>
+            </div>
+            <textarea
+              value={importContent}
+              onChange={(e) => setImportContent(e.target.value)}
+              placeholder="Collez ici le contenu YAML..."
+              className="w-full rounded border border-input bg-background px-3 py-2 text-sm font-mono min-h-[120px]"
+              rows={8}
+            />
+            <Button
+              className="mt-2"
+              onClick={handleImport}
+              disabled={!importContent.trim() || importing}
+              isLoading={importing}
+            >
+              Importer
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>

@@ -230,6 +230,7 @@ export default function TransactionsPage() {
       setImportOpen(false);
       if (refreshNeeded) {
         setPage(1);
+        accountService.list().then(setAccounts).catch(() => {});
         fetchTransactions();
         fetchCashflow();
         fetchBalanceAtDate();
@@ -785,6 +786,16 @@ function TransactionRow({
             <span className="inline-flex items-center rounded px-1 py-0 text-[10px] text-muted-foreground bg-muted shrink-0">
               {txn.parsed_metadata.card_id.slice(-4)}
             </span>
+          )}
+          {txn.cluster_name && (
+            <Link
+              to="/clusters"
+              className="inline-flex items-center rounded px-1 py-0 text-[10px] font-medium bg-primary/10 text-primary hover:bg-primary/20 shrink-0"
+              title="Liée au cluster"
+              onClick={(e) => e.stopPropagation()}
+            >
+              📁 {txn.cluster_name}
+            </Link>
           )}
         </div>
         {(txn.label_clean || txn.parsed_metadata?.counterparty) && (

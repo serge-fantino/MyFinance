@@ -2,6 +2,7 @@
  * Axios instance configured with auth interceptors.
  */
 import axios, { AxiosHeaders } from "axios";
+import { getFingerprint } from "../utils/fingerprint";
 
 const api = axios.create({
   baseURL: "/api/v1",
@@ -20,7 +21,7 @@ try {
   // localStorage may be unavailable in some environments; ignore.
 }
 
-// Request interceptor: attach JWT token
+// Request interceptor: attach JWT token + fingerprint for session tracking
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("access_token");
   if (token) {
@@ -30,10 +31,13 @@ api.interceptors.request.use((config) => {
     }
     if (config.headers instanceof AxiosHeaders) {
       config.headers.set("Authorization", `Bearer ${token}`);
+      config.headers.set("X-Client-Fingerprint", getFingerprint());
     } else {
       // Fallback for plain object headers
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (config.headers as any).Authorization = `Bearer ${token}`;
+      const h = config.headers as any;
+      h.Authorization = `Bearer ${token}`;
+      h["X-Client-Fingerprint"] = getFingerprint();
     }
   }
   return config;
@@ -53,9 +57,14 @@ api.interceptors.response.use(
         const refreshToken = localStorage.getItem("refresh_token");
         if (!refreshToken) throw new Error("No refresh token");
 
-        const { data } = await axios.post("/api/v1/auth/refresh", null, {
-          params: { refresh_token: refreshToken },
-        });
+        const { data } = await axios.post(
+          "/api/v1/auth/refresh",
+          null,
+          {
+            params: { refresh_token: refreshToken },
+            headers: { "X-Client-Fingerprint": getFingerprint() },
+          }
+        );
 
         localStorage.setItem("access_token", data.access_token);
         localStorage.setItem("refresh_token", data.refresh_token);

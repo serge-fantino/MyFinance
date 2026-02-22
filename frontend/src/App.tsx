@@ -13,6 +13,7 @@ import AnalyticsPage from "./pages/analytics/AnalyticsPage";
 import QueryPage from "./pages/query/QueryPage";
 import AIChatPage from "./pages/ai-chat/AIChatPage";
 import ClustersPage from "./pages/clusters/ClustersPage";
+import UserAccountPage from "./pages/account/UserAccountPage";
 
 function App() {
   return (
@@ -54,6 +55,7 @@ function App() {
           <Route path="/query" element={<QueryPage />} />
           <Route path="/ai-chat" element={<AIChatPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/account" element={<UserAccountPage />} />
         </Route>
 
         {/* Default redirect */}

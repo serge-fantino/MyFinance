@@ -175,6 +175,7 @@ async def update_cluster(
         transaction_ids=data.transaction_ids,
         rule_pattern=data.rule_pattern,
         match_type=data.match_type,
+        create_rule=data.create_rule,
     )
     if not result:
         raise HTTPException(status_code=404, detail="Cluster introuvable")

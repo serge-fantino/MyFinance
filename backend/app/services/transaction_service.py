@@ -93,7 +93,8 @@ class TransactionService:
         result = await self.db.execute(query)
         transactions = result.scalars().all()
 
-        # Enrich with category name
+        # Enrich with category name and cluster
+        from app.models.transaction_cluster import TransactionCluster
         enriched = []
         for txn in transactions:
             data = {
@@ -114,11 +115,17 @@ class TransactionService:
                 "ai_confidence": txn.ai_confidence,
                 "parsed_metadata": txn.parsed_metadata,
                 "created_at": txn.created_at,
+                "cluster_id": txn.cluster_id,
+                "cluster_name": None,
             }
             if txn.category_id:
                 cat = await self.db.get(Category, txn.category_id)
                 if cat:
                     data["category_name"] = cat.name
+            if txn.cluster_id:
+                cluster = await self.db.get(TransactionCluster, txn.cluster_id)
+                if cluster:
+                    data["cluster_name"] = cluster.name
             enriched.append(data)
 
         return {
@@ -331,9 +338,42 @@ class TransactionService:
         await self.db.refresh(txn)
         return txn
 
-    async def get_transaction(self, transaction_id: int, user: User) -> Transaction:
-        """Get a specific transaction."""
-        return await self._get_user_transaction(transaction_id, user)
+    async def get_transaction(self, transaction_id: int, user: User) -> dict:
+        """Get a specific transaction (enriched with category_name, cluster_name)."""
+        from app.models.transaction_cluster import TransactionCluster
+
+        txn = await self._get_user_transaction(transaction_id, user)
+        cat_name = None
+        if txn.category_id:
+            cat = await self.db.get(Category, txn.category_id)
+            if cat:
+                cat_name = cat.name
+        cluster_name = None
+        if txn.cluster_id:
+            cluster = await self.db.get(TransactionCluster, txn.cluster_id)
+            if cluster:
+                cluster_name = cluster.name
+        return {
+            "id": txn.id,
+            "account_id": txn.account_id,
+            "date": txn.date,
+            "value_date": txn.value_date,
+            "label_raw": txn.label_raw,
+            "label_clean": txn.label_clean,
+            "amount": txn.amount,
+            "currency": txn.currency,
+            "category_id": txn.category_id,
+            "category_name": cat_name,
+            "subcategory": txn.subcategory,
+            "notes": txn.notes,
+            "tags": txn.tags,
+            "source": txn.source,
+            "ai_confidence": txn.ai_confidence,
+            "parsed_metadata": txn.parsed_metadata,
+            "created_at": txn.created_at,
+            "cluster_id": txn.cluster_id,
+            "cluster_name": cluster_name,
+        }
 
     async def update_transaction(
         self,
@@ -396,6 +436,12 @@ class TransactionService:
             cat = await self.db.get(Category, txn.category_id)
             if cat:
                 cat_name = cat.name
+        cluster_name = None
+        if txn.cluster_id:
+            from app.models.transaction_cluster import TransactionCluster
+            cluster = await self.db.get(TransactionCluster, txn.cluster_id)
+            if cluster:
+                cluster_name = cluster.name
 
         return {
             "id": txn.id,
@@ -415,6 +461,8 @@ class TransactionService:
             "ai_confidence": txn.ai_confidence,
             "parsed_metadata": txn.parsed_metadata,
             "created_at": txn.created_at,
+            "cluster_id": txn.cluster_id,
+            "cluster_name": cluster_name,
             "rule_applied_count": rule_applied_count,
         }
 

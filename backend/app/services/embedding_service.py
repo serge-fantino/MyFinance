@@ -413,12 +413,13 @@ class EmbeddingService:
             distance_threshold = settings.embedding_cluster_distance_threshold
         distance_threshold = float(distance_threshold)
 
-        # Fetch uncategorized transactions with embeddings
+        # Fetch uncategorized transactions with embeddings (exclude those already in a cluster)
         user_accounts = select(Account.id).where(Account.user_id == user.id)
         query = select(Transaction).where(
             Transaction.account_id.in_(user_accounts),
             Transaction.deleted_at.is_(None),
             Transaction.category_id.is_(None),
+            Transaction.cluster_id.is_(None),
             Transaction.embedding.is_not(None),
         )
         if account_id:
@@ -434,11 +435,12 @@ class EmbeddingService:
                 "total_uncategorized": 0,
             }
 
-        # Count those without embeddings too
+        # Count those without embeddings too (uncategorized and not in any cluster)
         count_query = select(Transaction.id).where(
             Transaction.account_id.in_(user_accounts),
             Transaction.deleted_at.is_(None),
             Transaction.category_id.is_(None),
+            Transaction.cluster_id.is_(None),
         )
         if account_id:
             count_query = count_query.where(Transaction.account_id == account_id)

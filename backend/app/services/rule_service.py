@@ -135,11 +135,12 @@ class RuleService:
         if not rules:
             return {"applied": 0, "total_uncategorized": 0}
 
-        # Load uncategorized transactions
+        # Load uncategorized transactions (exclude those already in a cluster)
         user_accounts = select(Account.id).where(Account.user_id == user.id)
         txn_query = select(Transaction).where(
             Transaction.account_id.in_(user_accounts),
             Transaction.category_id.is_(None),
+            Transaction.cluster_id.is_(None),
             Transaction.deleted_at.is_(None),
         )
         if account_id:

@@ -52,6 +52,35 @@ class UserUpdate(BaseModel):
     preferences: dict | None = None
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Le mot de passe doit contenir au moins 8 caractères")
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Le mot de passe doit contenir au moins une majuscule")
+        if not re.search(r"[0-9]", v):
+            raise ValueError("Le mot de passe doit contenir au moins un chiffre")
+        return v
+
+
+class SessionResponse(BaseModel):
+    id: int
+    ip_address: str | None
+    fingerprint: str | None
+    device_info: str | None  # e.g. "Chrome 120 sur macOS 14.0 (Ordinateur)"
+    created_at: str | None
+    last_used_at: str | None
+
+
+class DeleteAccountRequest(BaseModel):
+    confirmation: str  # User must type "SUPPRIMER" or similar
+
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str

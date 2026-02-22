@@ -102,10 +102,10 @@ export const transactionService = {
   ): Promise<ImportResult> {
     const formData = new FormData();
     formData.append("file", file);
-    const params = new URLSearchParams({
-      account_id: String(accountId),
-      account_action: accountAction,
-    });
+    const params = new URLSearchParams({ account_action: accountAction });
+    if (accountAction !== "create") {
+      params.set("account_id", String(accountId));
+    }
     if (newAccountName) params.set("new_account_name", newAccountName);
     if (applyBalanceReference) params.set("apply_balance_reference", "true");
     const response = await api.post(`/transactions/import?${params}`, formData, {

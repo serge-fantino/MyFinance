@@ -8,6 +8,7 @@ from app.models.conversation import Conversation, Message
 from app.models.transaction import ImportLog, Transaction
 from app.models.transaction_cluster import TransactionCluster
 from app.models.user import User
+from app.models.user_session import UserSession
 
 __all__ = [
     "Base",
@@ -21,4 +22,5 @@ __all__ = [
     "Conversation",
     "Message",
     "ImportLog",
+    "UserSession",
 ]

@@ -41,18 +41,27 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
     }
   };
 
+  const isOfxFile = file?.name ? /\.(ofx|qfx|xml)$/i.test(file.name) : false;
+  const canProceedWithoutAccount = isOfxFile && accounts.length === 0;
+
   const handleNextOrImport = async () => {
-    if (!file || !accountId) return;
+    if (!file) return;
+    if (!canProceedWithoutAccount && !accountId) return;
     setError(null);
     setIsUploading(true);
     try {
       const previewResult = await transactionService.importPreview(file);
       setPreview(previewResult);
 
-      if ((previewResult.file_account_info || previewResult.file_balance_info) && accounts.length > 0) {
+      const hasOfxInfo = previewResult.file_account_info || previewResult.file_balance_info;
+      const canCreateFromOfx = canProceedWithoutAccount && !!previewResult.file_account_info;
+      if (hasOfxInfo && (accounts.length > 0 || canCreateFromOfx)) {
         setStep("confirm");
-      } else {
+        if (canProceedWithoutAccount) setAccountAction("create");
+      } else if (!canProceedWithoutAccount) {
         await doImport(parseInt(accountId), "use", undefined);
+      } else {
+        setError("Le fichier OFX ne contient pas d'informations de compte. Import impossible.");
       }
     } catch {
       setError("Erreur lors de la lecture du fichier.");
@@ -90,7 +99,8 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
   const handleConfirmImport = () => {
     const useBalanceRef = applyBalanceReference && !!preview?.file_balance_info;
     if (accountAction === "create" && newAccountName.trim()) {
-      doImport(parseInt(accountId), "create", newAccountName.trim(), useBalanceRef);
+      const targetId = accountId ? parseInt(accountId) : 0;
+      doImport(targetId, "create", newAccountName.trim(), useBalanceRef);
     } else if (accountAction === "create") {
       setError("Indiquez un nom pour le nouveau compte.");
     } else {
@@ -116,7 +126,7 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
           {step === "confirm" && (fileAccountInfo || preview?.file_balance_info) ? (
             /* Confirmation OFX : compte et/ou solde détectés */
             <div className="space-y-4">
-              {fileAccountInfo && accountAction !== "create" && (
+              {fileAccountInfo && accountAction !== "create" && accounts.length > 0 && (
                 <div className="space-y-1.5">
                   <label className="block text-sm font-medium">Compte cible</label>
                   <select
@@ -130,7 +140,15 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                   </select>
                 </div>
               )}
-              {!fileAccountInfo && (
+              {accounts.length === 0 && fileAccountInfo && (
+                <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+                  <p className="font-medium">Création de compte obligatoire</p>
+                  <p className="text-muted-foreground mt-0.5">
+                    Aucun compte existant. Un nouveau compte sera créé à partir des informations du fichier OFX.
+                  </p>
+                </div>
+              )}
+              {!fileAccountInfo && accounts.length > 0 && (
                 <>
                   <div className="space-y-1.5">
                     <label className="block text-sm font-medium">Compte cible</label>
@@ -216,28 +234,34 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
 
               {fileAccountInfo && (
               <div className="space-y-2">
-                <p className="text-sm font-medium">Choisir une action :</p>
+                <p className="text-sm font-medium">
+                  {accounts.length === 0 ? "Créer un nouveau compte" : "Choisir une action :"}
+                </p>
                 <div className="space-y-2">
-                  <label className="flex items-center gap-2 cursor-pointer rounded border p-3 hover:bg-muted/30">
-                    <input
-                      type="radio"
-                      name="account_action"
-                      checked={accountAction === "use"}
-                      onChange={() => setAccountAction("use")}
-                      className="rounded-full"
-                    />
-                    <span>Importer dans le compte sélectionné</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer rounded border p-3 hover:bg-muted/30">
-                    <input
-                      type="radio"
-                      name="account_action"
-                      checked={accountAction === "update"}
-                      onChange={() => setAccountAction("update")}
-                      className="rounded-full"
-                    />
-                    <span>Importer et mettre à jour les infos du compte</span>
-                  </label>
+                  {accounts.length > 0 && (
+                    <>
+                      <label className="flex items-center gap-2 cursor-pointer rounded border p-3 hover:bg-muted/30">
+                        <input
+                          type="radio"
+                          name="account_action"
+                          checked={accountAction === "use"}
+                          onChange={() => setAccountAction("use")}
+                          className="rounded-full"
+                        />
+                        <span>Importer dans le compte sélectionné</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer rounded border p-3 hover:bg-muted/30">
+                        <input
+                          type="radio"
+                          name="account_action"
+                          checked={accountAction === "update"}
+                          onChange={() => setAccountAction("update")}
+                          className="rounded-full"
+                        />
+                        <span>Importer et mettre à jour les infos du compte</span>
+                      </label>
+                    </>
+                  )}
                   <label className="flex items-center gap-2 cursor-pointer rounded border p-3 hover:bg-muted/30">
                     <input
                       type="radio"
@@ -274,7 +298,7 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                 </Button>
                 <Button
                   className="flex-1"
-                  disabled={fileAccountInfo && accountAction === "create" && !newAccountName.trim()}
+                  disabled={accountAction === "create" && !newAccountName.trim()}
                   isLoading={isUploading}
                   onClick={handleConfirmImport}
                 >
@@ -324,18 +348,28 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
           ) : (
             /* Import form */
             <div className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="block text-sm font-medium">Compte cible</label>
-                <select
-                  value={accountId}
-                  onChange={(e) => setAccountId(e.target.value)}
-                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
-                </select>
-              </div>
+              {!canProceedWithoutAccount && (
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium">Compte cible</label>
+                  <select
+                    value={accountId}
+                    onChange={(e) => setAccountId(e.target.value)}
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {canProceedWithoutAccount && (
+                <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+                  <p className="font-medium">Aucun compte existant</p>
+                  <p className="text-muted-foreground mt-0.5">
+                    Le fichier OFX permettra de créer un nouveau compte à partir des informations bancaires détectées.
+                  </p>
+                </div>
+              )}
 
               {/* Drop zone */}
               <div
@@ -383,11 +417,11 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                 </Button>
                 <Button
                   className="flex-1"
-                  disabled={!file || !accountId}
+                  disabled={!file || (!canProceedWithoutAccount && !accountId)}
                   isLoading={isUploading}
                   onClick={handleNextOrImport}
                 >
-                  {file?.name && /\.(ofx|qfx|xml)$/i.test(file.name) ? "Suivant" : "Importer"}
+                  {isOfxFile ? "Suivant" : "Importer"}
                 </Button>
               </div>
             </div>

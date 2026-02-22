@@ -31,10 +31,16 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
     ai_confidence: Mapped[str | None] = mapped_column(String(10), nullable=True)  # high, medium, low, rule, user, embedding
     parsed_metadata: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)  # structured label metadata
     embedding = mapped_column(Vector(384), nullable=True)  # sentence-transformers embedding
+    cluster_id: Mapped[int | None] = mapped_column(
+        ForeignKey("transaction_clusters.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Relationships
     account = relationship("Account", back_populates="transactions")
     category = relationship("Category", back_populates="transactions")
+    cluster = relationship("TransactionCluster", back_populates="transactions", foreign_keys=[cluster_id])
 
     __table_args__ = (
         Index("idx_transactions_account_date", "account_id", date.desc()),

@@ -704,11 +704,9 @@ export default function ClassificationPage() {
                           flatCategories={flatCategories}
                           interpretResult={interpretResults[cluster.cluster_id]}
                           isProcessing={processing === cluster.cluster_id}
-                          isSaving={savingClusterId === cluster.cluster_id}
                           llmUiEnabled={llmUiEnabled}
                           onAccept={() => handleAccept(cluster)}
                           onSkip={() => handleSkip(cluster.cluster_id)}
-                          onSaveToCluster={() => handleSaveToCluster(cluster)}
                           onOverrideCategory={(catId) => handleOverrideCategory(cluster.cluster_id, catId)}
                           onApplyLlmSuggestion={() => handleApplyLlmSuggestion(cluster)}
                           onInterpret={() => handleInterpret(cluster)}
@@ -923,11 +921,9 @@ function ClusterCard({
   flatCategories: { id: number; name: string; parentName: string | null; depth: number }[];
   interpretResult: InterpretClusterResult | "loading" | undefined;
   isProcessing: boolean;
-  isSaving?: boolean;
   llmUiEnabled: boolean;
   onAccept: () => void;
   onSkip: () => void;
-  onSaveToCluster: () => void;
   onOverrideCategory: (catId: number | null) => void;
   onApplyLlmSuggestion: () => void;
   onInterpret: () => void;
@@ -1008,18 +1004,9 @@ function ClusterCard({
             disabled={!hasSuggestion || isProcessing || includedCount === 0}
             isLoading={isProcessing}
             onClick={onAccept}
+            title="Classifier et créer le cluster (règle + cluster associé)"
           >
             Appliquer
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={isProcessing || isSaving}
-            isLoading={isSaving}
-            onClick={onSaveToCluster}
-            title="Enregistrer ce regroupement dans la table des clusters (sans classifier)"
-          >
-            Sauvegarder en cluster
           </Button>
           <Button variant="ghost" size="sm" disabled={isProcessing} onClick={onSkip}>
             Ignorer

@@ -405,7 +405,7 @@ async def import_preview(
 
 @router.post("/import", response_model=ImportResult)
 async def import_transactions(
-    account_id: int = Query(..., description="Target account (used for use/update)"),
+    account_id: int | None = Query(None, description="Target account (required for use/update, optional for create)"),
     account_action: str = Query("use", description="use | update | create"),
     new_account_name: str | None = Query(None, description="For create: name of new account"),
     apply_balance_reference: bool = Query(False, description="Use OFX balance as calibration point"),
@@ -431,32 +431,34 @@ async def import_transactions(
     from app.services.account_service import AccountService
     from app.schemas.account import AccountCreate, AccountUpdate
 
-    target_account_id = account_id
+    target_account_id: int
 
     if account_action == "create" and new_account_name:
         file_info = extract_ofx_account_info(content)
-        if file_info:
-            acc_service = AccountService(db)
-            bank_label = (
-                f"{file_info.get('institution', '') or ''} "
-                f"({file_info.get('bank_id', '')} / {file_info.get('branch_id', '')})".strip()
-                or None
-            )
-            new_acc = await acc_service.create_account(
-                AccountCreate(
-                    name=new_account_name,
-                    type="courant" if (file_info.get("acct_type") or "").upper() == "CHECKING" else "courant",
-                    currency=file_info.get("currency", "EUR"),
-                    bank_name=bank_label or f"Compte {file_info.get('acct_id', '')}",
-                    bank_id=file_info.get("bank_id") or None,
-                    branch_id=file_info.get("branch_id") or None,
-                ),
-                current_user,
-            )
-            target_account_id = new_acc.id
-        else:
+        if not file_info:
             raise ValidationError("Création de compte : informations bancaires non trouvées dans le fichier OFX.")
+        acc_service = AccountService(db)
+        bank_label = (
+            f"{file_info.get('institution', '') or ''} "
+            f"({file_info.get('bank_id', '')} / {file_info.get('branch_id', '')})".strip()
+            or None
+        )
+        new_acc = await acc_service.create_account(
+            AccountCreate(
+                name=new_account_name,
+                type="courant" if (file_info.get("acct_type") or "").upper() == "CHECKING" else "courant",
+                currency=file_info.get("currency", "EUR"),
+                bank_name=bank_label or f"Compte {file_info.get('acct_id', '')}",
+                bank_id=file_info.get("bank_id") or None,
+                branch_id=file_info.get("branch_id") or None,
+            ),
+            current_user,
+        )
+        target_account_id = new_acc.id
     elif account_action == "update":
+        if account_id is None:
+            raise ValidationError("Compte cible requis pour importer et mettre à jour un compte.")
+        target_account_id = account_id
         file_info = extract_ofx_account_info(content)
         if file_info:
             acc_service = AccountService(db)
@@ -474,6 +476,10 @@ async def import_transactions(
                 ),
                 current_user,
             )
+    else:  # use
+        if account_id is None:
+            raise ValidationError("Compte cible requis pour importer dans un compte existant.")
+        target_account_id = account_id
 
     service = ImportService(db)
     result = await service.import_file(

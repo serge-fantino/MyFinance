@@ -21,6 +21,7 @@ class ClusterUpdate(BaseModel):
     transaction_ids: list[int] | None = None
     rule_pattern: str | None = None
     match_type: str | None = None
+    create_rule: bool = False  # If True and pattern+category set, create ClassificationRule and link
 
 
 class ClusterFromProposal(BaseModel):

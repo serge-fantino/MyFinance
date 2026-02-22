@@ -30,17 +30,23 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 # ── JWT Tokens ────────────────────────────────────
-def create_access_token(user_id: int) -> str:
+def create_access_token(user_id: int, jti: str | None = None) -> str:
+    """Create access token. If jti is provided, links to session for revoke support."""
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=settings.jwt_access_token_expire_minutes
     )
     payload = {"sub": str(user_id), "exp": expire, "type": "access"}
+    if jti:
+        payload["jti"] = jti
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
-def create_refresh_token(user_id: int) -> str:
+def create_refresh_token(user_id: int, jti: str | None = None) -> str:
+    """Create refresh token. If jti is provided, it links to a UserSession for revoke support."""
     expire = datetime.now(timezone.utc) + timedelta(days=settings.jwt_refresh_token_expire_days)
     payload = {"sub": str(user_id), "exp": expire, "type": "refresh"}
+    if jti:
+        payload["jti"] = jti
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
@@ -63,8 +69,11 @@ async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
     db: AsyncSession = Depends(get_db),
 ):
-    """FastAPI dependency: extract and validate JWT, return current user."""
+    """FastAPI dependency: extract and validate JWT, return current user.
+    If access token has jti (session-linked), verifies session still exists (not revoked).
+    """
     from app.models.user import User
+    from app.models.user_session import UserSession
 
     payload = decode_token(credentials.credentials)
 
@@ -75,6 +84,22 @@ async def get_current_user(
         )
 
     user_id = int(payload["sub"])
+    jti = payload.get("jti")
+
+    # If token is session-linked, verify session wasn't revoked
+    if jti:
+        result = await db.execute(
+            select(UserSession).where(
+                UserSession.token_jti == jti,
+                UserSession.user_id == user_id,
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session révoquée",
+            )
+
     result = await db.execute(select(User).where(User.id == user_id, User.is_active.is_(True)))
     user = result.scalar_one_or_none()
 

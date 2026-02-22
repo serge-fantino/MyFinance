@@ -67,14 +67,19 @@ class ClassificationService:
         }
 
     async def recalculate(self, user: User, account_id: int, distance_threshold: float) -> dict:
-        """Recalculate classification: parse labels, compute embeddings, cluster. Replace proposal."""
+        """Recalculate classification: apply rules first, then parse labels, compute embeddings, cluster."""
         from app.services.embedding_service import EmbeddingService
         from app.services.label_parser import parse_label
+        from app.services.rule_service import RuleService
 
         # Verify account belongs to user
         account = await self.db.get(Account, account_id)
         if not account or account.user_id != user.id:
             raise ValueError("Account not found or access denied")
+
+        # Apply rules first (classifies and creates clusters for matches)
+        rule_service = RuleService(self.db)
+        await rule_service.apply_rules(user, account_id)
 
         # Parse labels
         from app.models.transaction import Transaction

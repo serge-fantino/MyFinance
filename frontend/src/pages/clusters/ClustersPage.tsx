@@ -766,10 +766,12 @@ function CreateFromSelectionDialog({
 
 function DetectionConfigDialog({
   cluster,
+  flatCategories,
   onClose,
   onSaved,
 }: {
   cluster: TransactionCluster;
+  flatCategories: { id: number; name: string; depth: number }[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -777,6 +779,9 @@ function DetectionConfigDialog({
   const [matchType, setMatchType] = useState<"contains" | "exact" | "starts_with" | "regex">(
     (cluster.match_type as "contains" | "exact" | "starts_with" | "regex") || "contains"
   );
+  const [categoryId, setCategoryId] = useState<number | "">(cluster.category_id ?? "");
+  const [customLabel, setCustomLabel] = useState(cluster.name || "");
+  const [createRule, setCreateRule] = useState(!cluster.rule_id);
   const [validationResult, setValidationResult] = useState<{
     match_count: number;
     total: number;
@@ -790,6 +795,7 @@ function DetectionConfigDialog({
   }, [rulePattern, matchType]);
 
   const transactionIds = cluster.transaction_ids || [];
+  const hasRule = !!cluster.rule_id;
 
   const handleValidate = async () => {
     if (!rulePattern.trim() || transactionIds.length === 0) return;
@@ -821,6 +827,9 @@ function DetectionConfigDialog({
       await clusterService.update(cluster.id, {
         rule_pattern: rulePattern.trim() || null,
         match_type: rulePattern.trim() ? matchType : null,
+        category_id: categoryId ? (categoryId as number) : null,
+        name: customLabel.trim() || undefined,
+        create_rule: createRule && !!rulePattern.trim() && !!categoryId,
       });
       onSaved();
       onClose();
@@ -842,7 +851,7 @@ function DetectionConfigDialog({
       >
         <h3 className="text-lg font-semibold mb-2">Config de détection</h3>
         <p className="text-sm text-muted-foreground mb-4">
-          Motif et type de correspondance pour identifier les futures transactions de ce cluster.
+          Mêmes champs que les règles de classification : motif, type, catégorie, libellé personnalisé.
         </p>
         <div className="space-y-4">
           <div>
@@ -882,6 +891,45 @@ function DetectionConfigDialog({
               <option value="regex">Expression régulière (regex)</option>
             </select>
           </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Catégorie</label>
+            <select
+              value={categoryId}
+              onChange={(e) => setCategoryId(e.target.value ? parseInt(e.target.value) : "")}
+              className="w-full rounded border border-input bg-background px-3 py-2 text-sm mt-1"
+            >
+              <option value="">— Aucune —</option>
+              {flatCategories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {"\u00A0".repeat(c.depth)}{c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Libellé personnalisé</label>
+            <input
+              type="text"
+              value={customLabel}
+              onChange={(e) => setCustomLabel(e.target.value)}
+              className="w-full rounded border border-input bg-background px-3 py-2 text-sm mt-1"
+              placeholder="Ex: Netflix, Amazon"
+            />
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Libellé affiché pour les transactions matchées (label_clean)
+            </p>
+          </div>
+          {!hasRule && (
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={createRule}
+                onChange={(e) => setCreateRule(e.target.checked)}
+                className="rounded border-input"
+              />
+              <span className="text-sm">Créer une règle de classification (visible dans Paramètres)</span>
+            </label>
+          )}
           <div className="flex gap-2">
             <Button
               type="button"
@@ -913,7 +961,11 @@ function DetectionConfigDialog({
           <Button type="button" variant="outline" onClick={onClose}>
             Fermer
           </Button>
-          <Button onClick={handleSave} disabled={saving} isLoading={saving}>
+          <Button
+            onClick={handleSave}
+            disabled={saving || (!!rulePattern.trim() && createRule && !categoryId)}
+            isLoading={saving}
+          >
             Enregistrer
           </Button>
         </div>
@@ -1370,6 +1422,7 @@ function ClusterCard({
           {detectionConfigOpen && (
             <DetectionConfigDialog
               cluster={cluster}
+              flatCategories={flatCategories}
               onClose={() => setDetectionConfigOpen(false)}
               onSaved={onUpdated}
             />

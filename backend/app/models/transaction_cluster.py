@@ -88,6 +88,7 @@ class TransactionCluster(Base, TimestampMixin):
     user = relationship("User")
     account = relationship("Account")
     category = relationship("Category")
+    transactions = relationship("Transaction", back_populates="cluster", foreign_keys="Transaction.cluster_id")
     proposal_cluster = relationship("ClassificationProposalCluster", foreign_keys=[proposal_cluster_id])
     rule = relationship("ClassificationRule")
 

@@ -48,6 +48,8 @@ class TransactionResponse(BaseModel):
     parsed_metadata: dict | None = None
     created_at: datetime
     rule_applied_count: int | None = None  # Only set after a category update
+    cluster_id: int | None = None
+    cluster_name: str | None = None
 
     model_config = {"from_attributes": True}
 

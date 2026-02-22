@@ -26,6 +26,8 @@ export interface Transaction {
   ai_confidence: string | null;
   parsed_metadata: ParsedMetadata | null;
   created_at: string;
+  cluster_id?: number | null;
+  cluster_name?: string | null;
 }
 
 export interface TransactionCreate {

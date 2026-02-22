@@ -159,7 +159,8 @@ format: ## Auto-format all code
 db-migrate: ## Create a new migration (usage: make db-migrate msg="add users table")
 	cd backend && ../$(ALEMBIC) revision --autogenerate -m "$(msg)"
 
-db-upgrade: ## Apply all pending migrations
+db-upgrade: ## Apply all pending migrations (uses backend/.env for DATABASE_URL)
+	@if [ ! -f backend/.env ]; then echo "⚠ backend/.env not found. Run 'make setup' first."; exit 1; fi
 	cd backend && ../$(ALEMBIC) upgrade head
 	@cd backend && echo "" && echo "Révision actuelle :" && ../$(ALEMBIC) current 2>/dev/null
 
