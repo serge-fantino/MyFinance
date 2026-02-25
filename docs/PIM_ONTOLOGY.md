@@ -8,6 +8,11 @@
 
 ### 1a. Domain Class Diagram
 
+![Domain Class Diagram](images/MyFinance_PIM_ClassDiagram.png)
+
+<details>
+<summary>PlantUML source</summary>
+
 ```plantuml
 @startuml MyFinance_PIM_ClassDiagram
 !theme plain
@@ -318,7 +323,14 @@ ImportLog "0..*" -- "1" Account : imported into >
 @enduml
 ```
 
+</details>
+
 ### 1b. Transaction Lifecycle State Diagram
+
+![Transaction Lifecycle](images/MyFinance_TransactionLifecycle.png)
+
+<details>
+<summary>PlantUML source</summary>
 
 ```plantuml
 @startuml MyFinance_TransactionLifecycle
@@ -372,7 +384,14 @@ Uncategorized --> SoftDeleted : soft delete
 @enduml
 ```
 
+</details>
+
 ### 1c. Classification Proposal Workflow
+
+![Classification Proposal Workflow](images/MyFinance_ClassificationWorkflow.png)
+
+<details>
+<summary>PlantUML source</summary>
 
 ```plantuml
 @startuml MyFinance_ClassificationWorkflow
@@ -424,7 +443,14 @@ CAccepted --> Applied : apply cluster
 @enduml
 ```
 
+</details>
+
 ### 1d. Account Status State Diagram
+
+![Account Status Lifecycle](images/MyFinance_AccountStatus.png)
+
+<details>
+<summary>PlantUML source</summary>
 
 ```plantuml
 @startuml MyFinance_AccountStatus
@@ -451,7 +477,14 @@ Active --> Archived : archive account
 @enduml
 ```
 
+</details>
+
 ### 1e. Import Workflow State Diagram
+
+![Import Workflow](images/MyFinance_ImportWorkflow.png)
+
+<details>
+<summary>PlantUML source</summary>
 
 ```plantuml
 @startuml MyFinance_ImportWorkflow
@@ -508,9 +541,18 @@ state Error {
 @enduml
 ```
 
+</details>
+
 ---
 
 ## 2. RDF/OWL Ontology (Turtle Syntax)
+
+### Ontology Knowledge Graph
+
+![RDF/OWL Ontology Graph](images/06_rdf_ontology_graph.png)
+
+<details>
+<summary>Turtle/RDF source</summary>
 
 ```turtle
 @prefix owl:    <http://www.w3.org/2002/07/owl#> .
@@ -1222,6 +1264,8 @@ mf:email a owl:FunctionalProperty .
 # Transaction dedupHash is unique among active transactions (functional property)
 mf:dedupHash a owl:FunctionalProperty .
 ```
+
+</details>
 
 ---
 
