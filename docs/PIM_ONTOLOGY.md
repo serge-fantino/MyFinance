@@ -315,6 +315,7 @@ ClassificationRule "0..*" ..> "0..*" Transaction : «matches»\npattern on label
 
 ClassificationProposal "1" *-- "0..*" TransactionCluster : contains >
 TransactionCluster "1" -- "1..*" Transaction : «groups»\nvia transaction_ids >
+TransactionCluster "0..1" ..> "0..1" ClassificationRule : «produces»\non accept (create_rule) >
 TransactionCluster "0..*" -- "0..1" Category : suggested category >
 TransactionCluster "0..*" -- "0..1" Category : overridden category >
 
@@ -881,6 +882,13 @@ mf:matchesTransaction
     rdfs:comment "A classification rule matches transactions whose label_raw satisfies the pattern (contains, exact, or starts_with). This is a computed, behavioral relationship — no FK exists. When applied, the matched transaction receives the rule's category and ai_confidence='rule'."@en ;
     rdfs:domain mf:ClassificationRule ;
     rdfs:range mf:Transaction .
+
+mf:producesRule
+    a owl:ObjectProperty ;
+    rdfs:label "produces rule"@en ;
+    rdfs:comment "When a user accepts a transaction cluster (with create_rule=True), a ClassificationRule is created or updated. The rule's pattern is derived from the cluster's rule_pattern (user override) or the first transaction's label_raw. This is a unidirectional, event-driven relationship — the rule has no back-reference to the cluster that produced it."@en ;
+    rdfs:domain mf:TransactionCluster ;
+    rdfs:range mf:ClassificationRule .
 
 mf:suggestedCategory
     a owl:ObjectProperty ;
