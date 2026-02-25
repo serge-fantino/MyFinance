@@ -550,7 +550,7 @@ state Error {
 
 ### 1f. Proposed Refinement: Persistent TransactionCluster
 
-> **Design evolution**: TransactionCluster becomes a persistent, first-class domain entity once accepted. Transactions carry a `cluster_id` reference. Recalculate only removes `pending`/`merging` clusters. New transactions can extend existing accepted clusters via a `merging` workflow.
+> **Design evolution**: TransactionCluster becomes a persistent, first-class domain entity once accepted. Transactions carry a `cluster_id` reference. Rules carry a `cluster_id` back-reference enabling automatic cluster growth. Recalculate only removes `pending`/`merging` clusters. New transactions can extend existing accepted clusters via two paths: rule-based (automatic) and embedding-based (user review via `merging` status).
 
 #### Proposed Class Diagram
 
@@ -562,25 +562,35 @@ state Error {
 |--------|---------|----------|
 | **Cluster persistence** | Ephemeral — all deleted on recalculate | `accepted` clusters persist, only `pending`/`merging` deleted |
 | **Transaction.clusterId** | Does not exist | `cluster_id : TransactionCluster [0..1]` — a transaction belongs to at most one cluster |
-| **Cluster → Rules** | 1 cluster produces 0..1 rule | 1 cluster produces 0..* rules (multiple patterns possible) |
+| **Rule.clusterId** | Does not exist | `cluster_id : TransactionCluster [0..1]` — back-reference to source cluster. When rule matches, auto-assigns `txn.cluster_id` |
+| **Cluster → Rules** | 1 cluster produces 0..1 rule (no back-ref) | Bidirectional: cluster owns 0..* rules, rule references its cluster |
 | **Cluster status** | `pending \| accepted` | `pending \| accepted \| merging` |
 | **Cluster members** | Stored as JSONB `transaction_ids` on cluster | Derived from `SELECT * WHERE cluster_id = X` |
 | **Cluster metrics** | Stored (`transactionCount`, `totalAmountAbs`) | Derived (computed from member transactions) |
-| **Merge workflow** | Does not exist | `merging` clusters link new txns to a parent `accepted` cluster |
+| **Cluster growth (rules)** | Does not exist | Rules with `cluster_id` auto-assign `txn.cluster_id` — cluster grows without user action |
+| **Cluster growth (embeddings)** | Does not exist | `merging` clusters link new txns to a parent `accepted` cluster — requires user review |
 
 #### Proposed Cluster Lifecycle
 
 ![Proposed Cluster Lifecycle](images/MyFinance_ProposedClusterLifecycle.png)
 
-**The `merging` status resolves the "new transactions extending a cluster" problem:**
+**Two paths to grow an accepted cluster:**
 
-1. **Recalculate** detects new uncategorized transactions similar to accepted clusters (embedding cosine similarity with cluster centroid)
-2. Creates `merging` cluster: `status = "merging"`, `parentCluster = accepted cluster`, `transaction_ids = new similar txns`
-3. User reviews: **confirm** → new txns get `cluster_id` of parent → merging cluster deleted
-4. User reviews: **reject** → new txns form their own new accepted cluster
-5. User reviews: **skip** → merging cluster deleted on next recalculate
+**Path 1 — Automatic (via rules with `cluster_id`):**
+1. User accepts a cluster → rules optionally created with `rule.cluster_id` set
+2. New transactions imported → rules applied automatically
+3. When a rule with `cluster_id` matches: sets `txn.category_id` AND `txn.cluster_id`
+4. Cluster grows automatically — no user action needed
 
-**Rules remain independent of clusters:** a rule-based classification does NOT set `cluster_id`. Rules and clusters are complementary — rules are pattern-based automation, clusters are semantic grouping. A transaction can be classified by a rule (has `category_id`) without belonging to a cluster (no `cluster_id`), and vice versa.
+**Path 2 — Assisted (via embeddings, `merging` status):**
+1. New transactions not matched by any rule remain uncategorized
+2. **Recalculate** detects embedding similarity with accepted cluster centroids
+3. Creates `merging` cluster: `status = "merging"`, `parentCluster = accepted cluster`
+4. User reviews: **confirm** → new txns get `cluster_id` of parent → merging deleted
+5. User reviews: **reject** → new txns form their own new accepted cluster
+6. User reviews: **skip** → merging cluster deleted on next recalculate
+
+**Rules without `cluster_id` behave as today** — they only set `category_id`, no cluster assignment. This preserves backward compatibility: a transaction can be classified by a rule without belonging to any cluster.
 
 ---
 
