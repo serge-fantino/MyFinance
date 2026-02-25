@@ -550,7 +550,7 @@ state Error {
 
 ### 1f. Proposed Refinement: Persistent TransactionCluster
 
-> **Design evolution**: TransactionCluster becomes a persistent, first-class domain entity once accepted. Transactions carry a `cluster_id` reference. Rules carry a `cluster_id` back-reference enabling automatic cluster growth. Recalculate only removes `pending`/`merging` clusters. New transactions can extend existing accepted clusters via two paths: rule-based (automatic) and embedding-based (user review via `merging` status).
+> **Design evolution**: TransactionCluster becomes a persistent, first-class domain entity once accepted. Transactions carry a `cluster_id` reference. Rules carry a `cluster_id` back-reference enabling cluster detection. Recalculate only removes `pending`/`merging` clusters. New transactions can be detected as cluster candidates via two methods — rule-based (on import) and embedding-based (on recalculate) — but **both go through a `merging` review** where the user can exclude specific transactions before confirming cluster membership.
 
 #### Proposed Class Diagram
 
@@ -567,28 +567,37 @@ state Error {
 | **Cluster status** | `pending \| accepted` | `pending \| accepted \| merging` |
 | **Cluster members** | Stored as JSONB `transaction_ids` on cluster | Derived from `SELECT * WHERE cluster_id = X` |
 | **Cluster metrics** | Stored (`transactionCount`, `totalAmountAbs`) | Derived (computed from member transactions) |
-| **Cluster growth (rules)** | Does not exist | Rules with `cluster_id` auto-assign `txn.cluster_id` — cluster grows without user action |
-| **Cluster growth (embeddings)** | Does not exist | `merging` clusters link new txns to a parent `accepted` cluster — requires user review |
+| **Cluster growth (rules)** | Does not exist | Rules with `cluster_id` detect candidate txns on import → creates `merging` proposal → user reviews, can exclude txns → confirms |
+| **Cluster growth (embeddings)** | Does not exist | Recalculate detects embedding similarity → creates `merging` proposal → user reviews, can exclude txns → confirms |
+| **User control** | No cluster persistence | User can **exclude specific transactions** from a merging proposal before confirming — both paths go through `merging` review |
 
 #### Proposed Cluster Lifecycle
 
 ![Proposed Cluster Lifecycle](images/MyFinance_ProposedClusterLifecycle.png)
 
-**Two paths to grow an accepted cluster:**
+**Two detection methods, one review flow:**
 
-**Path 1 — Automatic (via rules with `cluster_id`):**
+Both paths to grow a cluster go through the **`merging` status**, giving the user full control to **exclude specific transactions** before confirming cluster membership.
+
+**Detection 1 — Rules (on import):**
 1. User accepts a cluster → rules optionally created with `rule.cluster_id` set
-2. New transactions imported → rules applied automatically
-3. When a rule with `cluster_id` matches: sets `txn.category_id` AND `txn.cluster_id`
-4. Cluster grows automatically — no user action needed
+2. New transactions imported → rules applied → sets `txn.category_id`
+3. When a rule with `cluster_id` matches: creates a **`merging` proposal** linking candidate txns to the parent cluster
+4. User reviews: can **exclude** specific txns that don't truly belong
+5. User **confirms** → remaining txns get `cluster_id` → merging deleted
+6. User **rejects** → txns form their own new accepted cluster
+7. User **skips** → merging cluster deleted on next recalculate
 
-**Path 2 — Assisted (via embeddings, `merging` status):**
+**Detection 2 — Embeddings (on recalculate):**
 1. New transactions not matched by any rule remain uncategorized
 2. **Recalculate** detects embedding similarity with accepted cluster centroids
-3. Creates `merging` cluster: `status = "merging"`, `parentCluster = accepted cluster`
-4. User reviews: **confirm** → new txns get `cluster_id` of parent → merging deleted
-5. User reviews: **reject** → new txns form their own new accepted cluster
-6. User reviews: **skip** → merging cluster deleted on next recalculate
+3. Creates **`merging` proposal**: `status = "merging"`, `parentCluster = accepted cluster`
+4. User reviews: can **exclude** specific txns that don't truly belong
+5. User **confirms** → remaining txns get `cluster_id` → merging deleted
+6. User **rejects** → txns form their own new accepted cluster
+7. User **skips** → merging cluster deleted on next recalculate
+
+**Why `merging` for both paths?** Even when a rule matches, the user may want to manually exclude certain transactions that were incorrectly matched. The `merging` status provides a universal review step before `txn.cluster_id` is permanently assigned.
 
 **Rules without `cluster_id` behave as today** — they only set `category_id`, no cluster assignment. This preserves backward compatibility: a transaction can be classified by a rule without belonging to any cluster.
 
