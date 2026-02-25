@@ -548,6 +548,42 @@ state Error {
 
 ---
 
+### 1f. Proposed Refinement: Persistent TransactionCluster
+
+> **Design evolution**: TransactionCluster becomes a persistent, first-class domain entity once accepted. Transactions carry a `cluster_id` reference. Recalculate only removes `pending`/`merging` clusters. New transactions can extend existing accepted clusters via a `merging` workflow.
+
+#### Proposed Class Diagram
+
+![Proposed Persistent Cluster Model](images/MyFinance_ProposedCluster.png)
+
+**Key changes from current model:**
+
+| Aspect | Current | Proposed |
+|--------|---------|----------|
+| **Cluster persistence** | Ephemeral — all deleted on recalculate | `accepted` clusters persist, only `pending`/`merging` deleted |
+| **Transaction.clusterId** | Does not exist | `cluster_id : TransactionCluster [0..1]` — a transaction belongs to at most one cluster |
+| **Cluster → Rules** | 1 cluster produces 0..1 rule | 1 cluster produces 0..* rules (multiple patterns possible) |
+| **Cluster status** | `pending \| accepted` | `pending \| accepted \| merging` |
+| **Cluster members** | Stored as JSONB `transaction_ids` on cluster | Derived from `SELECT * WHERE cluster_id = X` |
+| **Cluster metrics** | Stored (`transactionCount`, `totalAmountAbs`) | Derived (computed from member transactions) |
+| **Merge workflow** | Does not exist | `merging` clusters link new txns to a parent `accepted` cluster |
+
+#### Proposed Cluster Lifecycle
+
+![Proposed Cluster Lifecycle](images/MyFinance_ProposedClusterLifecycle.png)
+
+**The `merging` status resolves the "new transactions extending a cluster" problem:**
+
+1. **Recalculate** detects new uncategorized transactions similar to accepted clusters (embedding cosine similarity with cluster centroid)
+2. Creates `merging` cluster: `status = "merging"`, `parentCluster = accepted cluster`, `transaction_ids = new similar txns`
+3. User reviews: **confirm** → new txns get `cluster_id` of parent → merging cluster deleted
+4. User reviews: **reject** → new txns form their own new accepted cluster
+5. User reviews: **skip** → merging cluster deleted on next recalculate
+
+**Rules remain independent of clusters:** a rule-based classification does NOT set `cluster_id`. Rules and clusters are complementary — rules are pattern-based automation, clusters are semantic grouping. A transaction can be classified by a rule (has `category_id`) without belonging to a cluster (no `cluster_id`), and vice versa.
+
+---
+
 ## 2. RDF/OWL Ontology (Turtle Syntax)
 
 ### Ontology Knowledge Graph
@@ -1357,6 +1393,8 @@ mf:dedupHash a owl:FunctionalProperty .
 6. **Implement the full ImportLog state machine** (pending → processing → done/error) for better observability.
 
 7. **Consider a `RecurringTransaction` concept** to model subscriptions and regular income (salary), enabling forecasting and anomaly detection.
+
+8. **Make TransactionCluster a persistent entity** (see section 1f). Currently clusters are ephemeral proposals deleted on every recalculate. The proposed evolution makes accepted clusters persistent, adds `Transaction.cluster_id`, introduces a `merging` status for extending clusters with newly imported transactions, and supports multiple rules per cluster. This resolves the loss of classification history and enables cluster-based analytics.
 
 ---
 
