@@ -311,8 +311,10 @@ Transaction "1" *-- "0..1" ParsedMetadata : has metadata >
 Category "0..1" o-- "0..*" Category : parent / children >
 
 ClassificationRule "0..*" -- "1" Category : assigns >
+ClassificationRule "0..*" ..> "0..*" Transaction : «matches»\npattern on label_raw >
 
 ClassificationProposal "1" *-- "0..*" TransactionCluster : contains >
+TransactionCluster "1" -- "1..*" Transaction : «groups»\nvia transaction_ids >
 TransactionCluster "0..*" -- "0..1" Category : suggested category >
 TransactionCluster "0..*" -- "0..1" Category : overridden category >
 
@@ -866,6 +868,20 @@ mf:containsCluster
     rdfs:domain mf:ClassificationProposal ;
     rdfs:range mf:TransactionCluster .
 
+mf:groupsTransaction
+    a owl:ObjectProperty ;
+    rdfs:label "groups transaction"@en ;
+    rdfs:comment "A transaction cluster groups one or more transactions identified as semantically similar. Stored as a denormalized JSONB array of transaction IDs."@en ;
+    rdfs:domain mf:TransactionCluster ;
+    rdfs:range mf:Transaction .
+
+mf:matchesTransaction
+    a owl:ObjectProperty ;
+    rdfs:label "matches transaction"@en ;
+    rdfs:comment "A classification rule matches transactions whose label_raw satisfies the pattern (contains, exact, or starts_with). This is a computed, behavioral relationship — no FK exists. When applied, the matched transaction receives the rule's category and ai_confidence='rule'."@en ;
+    rdfs:domain mf:ClassificationRule ;
+    rdfs:range mf:Transaction .
+
 mf:suggestedCategory
     a owl:ObjectProperty ;
     rdfs:label "suggested category"@en ;
@@ -1256,6 +1272,13 @@ mf:Transaction rdfs:subClassOf [
     a owl:Restriction ;
     owl:onProperty mf:hasParsedMetadata ;
     owl:maxCardinality "1"^^xsd:nonNegativeInteger
+] .
+
+# A TransactionCluster must group at least one Transaction
+mf:TransactionCluster rdfs:subClassOf [
+    a owl:Restriction ;
+    owl:onProperty mf:groupsTransaction ;
+    owl:minCardinality "1"^^xsd:nonNegativeInteger
 ] .
 
 # User email is unique (functional property already declared)
