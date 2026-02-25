@@ -603,7 +603,116 @@ Both paths to grow a cluster go through the **`merging` status**, giving the use
 
 ---
 
-## 2. RDF/OWL Ontology (Turtle Syntax)
+## 2. Platform Specific Model (PSM) — Component Architecture
+
+> **PSM overview**: Maps the domain model onto the concrete technology stack. Shows how React frontend, FastAPI backend, PostgreSQL + pgvector database, and AI/ML services interact as deployable components.
+
+### Architecture Diagram
+
+![PSM Architecture](images/MyFinance_PSM_Architecture.png)
+
+<details>
+<summary>PlantUML source</summary>
+
+```plantuml
+@startuml MyFinance_PSM_Architecture
+' (source in /tmp/puml/08_psm_architecture.puml)
+' Full PlantUML source omitted for brevity — see collapsible section below
+@enduml
+```
+
+</details>
+
+### Technology Matrix
+
+| Layer | Technologies | Role |
+|-------|-------------|------|
+| **Frontend** | React 18, TypeScript, Vite 5 | SPA with client-side routing |
+| **State** | Zustand (auth, ui) + React Query v5 (server cache) | Minimal client state, 5-min server cache |
+| **UI** | TailwindCSS + shadcn/ui + Recharts | Design system, data visualization |
+| **API Client** | Axios + JWT interceptors | Auto-attach Bearer, auto-refresh on 401 |
+| **Backend** | FastAPI (async), Python 3.12, Pydantic v2 | REST API `/api/v1`, async-first |
+| **Auth** | JWT (HS256, python-jose) + bcrypt | 30-min access token, 7-day refresh |
+| **ORM** | SQLAlchemy 2.0 (async) + Alembic | Async sessions via asyncpg, 9 migrations |
+| **Database** | PostgreSQL 16 + pgvector | Relational + vector similarity search |
+| **Cache** | Redis 7 | Token blacklist, session cache |
+| **Embeddings** | sentence-transformers (MiniLM-L12-v2, 384d) | Local model, cosine + AgglomerativeClustering |
+| **LLM** | Multi-provider: Ollama / OpenAI / Anthropic / Gemini | Chat assistant, category interpretation, dataviz DSL |
+| **Infra** | Docker Compose (4 services), Uvicorn, Nginx | db + redis + backend + frontend |
+
+### Component Breakdown
+
+#### Frontend (React 18 + TypeScript + Vite)
+
+| Component | Responsibility |
+|-----------|---------------|
+| **Pages** | DashboardPage, TransactionsPage, ClassificationPage, AnalyticsPage, AIChatPage + QueryPage, SettingsPage |
+| **Zustand Store** | `auth.store` (user, tokens, isAuthenticated), `ui.store` (sidebar, modals) |
+| **React Query** | Server state cache, auto-refetch on focus, mutation → invalidation |
+| **Axios Client** | Base URL `/api/v1`, request interceptor (JWT), response interceptor (401 → refresh) |
+| **Recharts** | Cashflow charts, category breakdowns, trend visualizations |
+
+#### Backend (FastAPI + Python 3.12)
+
+**API Routes** (`/api/v1`):
+
+| Route Group | Endpoints | Service |
+|-------------|-----------|---------|
+| `/auth/*` | register, login, refresh | AuthService |
+| `/accounts/*` | CRUD, balance | AccountService |
+| `/transactions/*` | CRUD, import, parse-labels, clusters | TransactionService, ImportService |
+| `/classification/*` | proposals, recalculate | ClassificationService |
+| `/classification-rules/*` | CRUD | RuleService |
+| `/analytics/*` | summary, trends | AnalyticsService |
+| `/ai/*` | chat, conversations, query, config, metamodel | ChatService, QueryEngine |
+
+**Domain Services**:
+
+| Service | Responsibility |
+|---------|---------------|
+| **ImportService** | Parse CSV/Excel/OFX, SHA256 dedup + fuzzy matching (±7 days), label extraction |
+| **RuleService** | Pattern matching (contains/exact/starts_with), priority engine, auto-apply on import |
+| **ClassificationService** | Embedding clustering (AgglomerativeClustering), proposal management, k-NN classification |
+| **EmbeddingService** | sentence-transformers encode(), cosine similarity, cluster detection |
+| **ChatService** | LLM orchestration, prompt engineering, dataviz block parsing |
+| **QueryEngine** | DSL → SQLAlchemy compiler, security-first (user_id injected server-side), max 1000 rows |
+| **LLMProvider** | Abstract interface: OllamaChatProvider, OpenAIChatProvider, AnthropicChatProvider, GeminiChatProvider |
+| **LabelParser** | French bank label parsing (VIREMENT SEPA, CB, PRELEVEMENT...) → structured metadata |
+
+#### Data Layer
+
+| Component | Details |
+|-----------|---------|
+| **PostgreSQL 16** | Core tables: users, accounts, transactions, categories, classification_rules, classification_proposals, classification_proposal_clusters, conversations, messages |
+| **pgvector** | `embedding Vector(384)` on transactions table, enables semantic similarity search |
+| **Redis 7** | Token blacklist, session cache |
+| **Alembic** | 9 migration versions (users → core tables → embeddings → proposals → conversations) |
+
+### Key Data Flows
+
+```
+Import Flow:
+  CSV/Excel/OFX → ImportService → dedup → LabelParser → RuleService
+  → auto-categorize → remaining uncategorized → wait for recalculate
+
+Classification Flow:
+  Recalculate → EmbeddingService.encode() → AgglomerativeClustering
+  → ClassificationService → proposals (pending/merging clusters)
+  → user reviews → accept/reject/skip → RuleService (create rules)
+
+Chat Flow:
+  User message → ChatService → FinancialContext → LLMProvider.chat()
+  → parse ```dataviz blocks → QueryEngine.execute() → response + charts
+
+Query Flow:
+  LLM generates {query: DSL, viz: spec} → QueryEngine validates metamodel
+  → compiles to SQLAlchemy Select → injects user_id security context
+  → async execute → flat rows → frontend Recharts
+```
+
+---
+
+## 3. RDF/OWL Ontology (Turtle Syntax)
 
 ### Ontology Knowledge Graph
 
@@ -1355,7 +1464,7 @@ mf:dedupHash a owl:FunctionalProperty .
 
 ---
 
-## 3. Semantic Gap Analysis
+## 4. Semantic Gap Analysis
 
 ### 3.1 Business Rules NOT Fully Captured in the Models
 
@@ -1417,7 +1526,7 @@ mf:dedupHash a owl:FunctionalProperty .
 
 ---
 
-## 4. PIM Metadata
+## 5. PIM Metadata
 
 ### Domain Name
 **Personal Finance Management with AI-Assisted Classification**
