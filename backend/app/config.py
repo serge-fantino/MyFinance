@@ -3,10 +3,14 @@
 from pydantic_settings import BaseSettings
 
 
+APP_VERSION = "0.2.0"
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # App
+    app_version: str = APP_VERSION
     app_env: str = "development"
     app_debug: bool = True
     app_secret_key: str = "change-me"

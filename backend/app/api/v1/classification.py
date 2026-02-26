@@ -88,6 +88,7 @@ async def apply_cluster(
         data.create_rule,
         data.rule_pattern,
         data.custom_label,
+        data.detach,
     )
 
 

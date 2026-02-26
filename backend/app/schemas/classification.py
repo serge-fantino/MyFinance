@@ -23,6 +23,7 @@ class ClassificationClusterResponse(BaseModel):
     rule_pattern: str | None = None
     custom_label: str | None = None
     excluded_ids: list[int] | None = None
+    transaction_cluster_id: int | None = None
 
 
 class ClassificationProposalResponse(BaseModel):
@@ -57,12 +58,16 @@ class ClassificationPatchRequest(BaseModel):
 
 
 class ApplyClusterRequest(BaseModel):
-    """Request to apply a cluster (classify its transactions)."""
+    """Request to apply a cluster (classify its transactions).
+
+    EVOL-001: detach=True creates a new TC even when the proposal is linked to an existing one.
+    """
     transaction_ids: list[int]
     category_id: int
     create_rule: bool = True
     rule_pattern: str | None = None
     custom_label: str | None = None
+    detach: bool = False
 
 
 class ApplyClusterResponse(BaseModel):

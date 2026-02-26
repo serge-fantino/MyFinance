@@ -57,6 +57,7 @@ class ClassificationService:
                 "rule_pattern": c.rule_pattern or "",
                 "custom_label": c.custom_label or "",
                 "excluded_ids": c.excluded_ids or [],
+                "transaction_cluster_id": c.transaction_cluster_id,
             })
         return {
             "account_id": proposal.account_id,
@@ -67,7 +68,15 @@ class ClassificationService:
         }
 
     async def recalculate(self, user: User, account_id: int, distance_threshold: float) -> dict:
-        """Recalculate classification: apply rules first, then parse labels, compute embeddings, cluster."""
+        """Recalculate classification: apply rules first, then parse labels, compute embeddings, cluster.
+
+        EVOL-001: Rules only classify (set category_id). They no longer auto-create clusters.
+        For rules with cluster_id, linked ProposalClusters are created so the user can
+        review and confirm the merge into the existing TransactionCluster.
+        """
+        from app.models.classification_rule import ClassificationRule
+        from app.models.transaction import Transaction
+        from app.models.transaction_cluster import TransactionCluster
         from app.services.embedding_service import EmbeddingService
         from app.services.label_parser import parse_label
         from app.services.rule_service import RuleService
@@ -77,13 +86,12 @@ class ClassificationService:
         if not account or account.user_id != user.id:
             raise ValueError("Account not found or access denied")
 
-        # Apply rules first (classifies and creates clusters for matches)
+        # Apply rules first — only classifies, returns rule_matches for linked proposals
         rule_service = RuleService(self.db)
-        await rule_service.apply_rules(user, account_id)
+        rule_result = await rule_service.apply_rules(user, account_id)
+        rule_matches = rule_result.get("rule_matches", {})
 
         # Parse labels
-        from app.models.transaction import Transaction
-        user_accounts = select(Account.id).where(Account.user_id == user.id)
         query = select(Transaction).where(
             Transaction.account_id == account_id,
             Transaction.deleted_at.is_(None),
@@ -100,10 +108,72 @@ class ClassificationService:
         embedding_service = EmbeddingService(self.db)
         await embedding_service.compute_missing_embeddings(user, account_id)
 
-        # Get clusters
+        # Get clusters (embedding-based, for uncategorized transactions)
         clusters_data = await embedding_service.get_clusters(
             user, account_id, None, distance_threshold
         )
+
+        # Build linked ProposalClusters for rules that have cluster_id
+        linked_clusters = []
+        if rule_matches:
+            # Load rules that have cluster_id set
+            rule_ids_with_matches = list(rule_matches.keys())
+            rules_result = await self.db.execute(
+                select(ClassificationRule).where(
+                    ClassificationRule.id.in_(rule_ids_with_matches),
+                    ClassificationRule.cluster_id.isnot(None),
+                )
+            )
+            linked_rules = list(rules_result.scalars().all())
+
+            for rule in linked_rules:
+                matched_txn_ids = rule_matches.get(rule.id, [])
+                if not matched_txn_ids:
+                    continue
+
+                # Load the TransactionCluster to get its name
+                tc = await self.db.get(TransactionCluster, rule.cluster_id)
+                if not tc:
+                    continue
+
+                # Load matched transactions for display
+                txn_result = await self.db.execute(
+                    select(Transaction).where(Transaction.id.in_(matched_txn_ids))
+                )
+                txns = list(txn_result.scalars().all())
+                txn_data = [
+                    {
+                        "id": t.id,
+                        "label_raw": t.label_raw,
+                        "amount": float(t.amount),
+                        "date": t.date.isoformat(),
+                    }
+                    for t in txns
+                ]
+                total_abs = sum(abs(float(t.amount)) for t in txns)
+
+                linked_clusters.append({
+                    "representative_label": tc.name,
+                    "transaction_ids": matched_txn_ids,
+                    "transactions": txn_data,
+                    "transaction_count": len(matched_txn_ids),
+                    "total_amount_abs": total_abs,
+                    "suggested_category_id": tc.category_id,
+                    "suggested_category_name": None,
+                    "suggestion_confidence": "rule",
+                    "suggestion_source": "rule_linked",
+                    "suggestion_explanation": f"Matched by rule '{rule.pattern}' → cluster '{tc.name}'",
+                    # EVOL-001: link to existing TC
+                    "transaction_cluster_id": tc.id,
+                    "rule_pattern": rule.pattern,
+                })
+
+                # Resolve category name for display
+                if tc.category_id:
+                    from app.models.category import Category
+                    cat = await self.db.get(Category, tc.category_id)
+                    if cat:
+                        linked_clusters[-1]["suggested_category_name"] = cat.name
 
         # Upsert proposal: delete old clusters, create new proposal with clusters
         existing = await self.db.execute(
@@ -132,10 +202,35 @@ class ClassificationService:
             self.db.add(proposal)
         await self.db.flush()
 
-        for i, cluster_data in enumerate(clusters_data["clusters"]):
+        cluster_index = 0
+
+        # Add linked ProposalClusters first (rule-matched, linked to existing TC)
+        for cluster_data in linked_clusters:
             c = ClassificationProposalCluster(
                 proposal_id=proposal.id,
-                cluster_index=i,
+                cluster_index=cluster_index,
+                representative_label=cluster_data["representative_label"],
+                transaction_ids=cluster_data["transaction_ids"],
+                transactions=cluster_data["transactions"],
+                transaction_count=cluster_data["transaction_count"],
+                total_amount_abs=cluster_data["total_amount_abs"],
+                suggested_category_id=cluster_data.get("suggested_category_id"),
+                suggested_category_name=cluster_data.get("suggested_category_name"),
+                suggestion_confidence=cluster_data.get("suggestion_confidence"),
+                suggestion_source=cluster_data.get("suggestion_source"),
+                suggestion_explanation=cluster_data.get("suggestion_explanation"),
+                status="pending",
+                rule_pattern=cluster_data.get("rule_pattern"),
+                transaction_cluster_id=cluster_data.get("transaction_cluster_id"),
+            )
+            self.db.add(c)
+            cluster_index += 1
+
+        # Add unlinked ProposalClusters (embedding-based, new patterns)
+        for cluster_data in clusters_data["clusters"]:
+            c = ClassificationProposalCluster(
+                proposal_id=proposal.id,
+                cluster_index=cluster_index,
                 representative_label=cluster_data["representative_label"],
                 transaction_ids=cluster_data["transaction_ids"],
                 transactions=cluster_data["transactions"],
@@ -149,6 +244,8 @@ class ClassificationService:
                 status="pending",
             )
             self.db.add(c)
+            cluster_index += 1
+
         await self.db.flush()
         await self.db.refresh(proposal)
         result = await self.db.execute(
@@ -162,7 +259,8 @@ class ClassificationService:
             "classification_recalculated",
             user_id=user.id,
             account_id=account_id,
-            clusters=len(clusters_data["clusters"]),
+            linked_clusters=len(linked_clusters),
+            embedding_clusters=len(clusters_data["clusters"]),
         )
 
         return self._proposal_to_dict(proposal)
@@ -223,8 +321,15 @@ class ClassificationService:
         create_rule: bool = True,
         rule_pattern: str | None = None,
         custom_label: str | None = None,
+        detach: bool = False,
     ) -> dict:
-        """Apply classification to a cluster's transactions. Updates cluster status to accepted."""
+        """Apply classification to a cluster's transactions. Updates cluster status to accepted.
+
+        EVOL-001: Handles linked vs unlinked proposals:
+        - Linked (transaction_cluster_id set, detach=False): merge txns into existing TC
+        - Linked + detach=True: ignore the link, create a new TC instead
+        - Unlinked (transaction_cluster_id is None): create a new TC (as before)
+        """
         from fastapi import HTTPException
 
         from app.services.embedding_service import EmbeddingService
@@ -261,20 +366,59 @@ class ClassificationService:
             cluster.custom_label = custom_label
         await self.db.flush()
 
-        # Auto-create a persistent TransactionCluster (with lifetime link to proposal cluster)
         from app.services.cluster_service import ClusterService
         cluster_service = ClusterService(self.db)
-        cluster_name = custom_label or cluster.representative_label
-        await cluster_service.create_cluster(
-            user=user,
-            name=cluster_name,
-            transaction_ids=transaction_ids,
-            category_id=category_id,
-            source="classification",
-            proposal_cluster_id=cluster.id,
-            rule_pattern=rule_pattern,
-            match_type="embedding",
-        )
+
+        # EVOL-001: Linked proposal → merge into existing TC (unless detach requested)
+        if cluster.transaction_cluster_id and not detach:
+            # Merge transactions into the existing TransactionCluster
+            from app.models.transaction_cluster import TransactionCluster
+            tc = await self.db.get(TransactionCluster, cluster.transaction_cluster_id)
+            if tc and tc.user_id == user.id:
+                current_ids = set(tc.transaction_ids or [])
+                new_ids = list(current_ids | set(transaction_ids))
+                await cluster_service.update_cluster(
+                    user=user,
+                    cluster_id=tc.id,
+                    transaction_ids=new_ids,
+                )
+                logger.info(
+                    "cluster_merged",
+                    user_id=user.id,
+                    tc_id=tc.id,
+                    merged_count=len(transaction_ids),
+                )
+            else:
+                # TC not found or ownership mismatch — fall through to create new
+                logger.warning(
+                    "linked_tc_not_found",
+                    user_id=user.id,
+                    tc_id=cluster.transaction_cluster_id,
+                )
+                cluster_name = custom_label or cluster.representative_label
+                await cluster_service.create_cluster(
+                    user=user,
+                    name=cluster_name,
+                    transaction_ids=transaction_ids,
+                    category_id=category_id,
+                    source="classification",
+                    proposal_cluster_id=cluster.id,
+                    rule_pattern=rule_pattern,
+                    match_type="embedding",
+                )
+        else:
+            # Unlinked proposal or detach: create a new persistent TransactionCluster
+            cluster_name = custom_label or cluster.representative_label
+            await cluster_service.create_cluster(
+                user=user,
+                name=cluster_name,
+                transaction_ids=transaction_ids,
+                category_id=category_id,
+                source="classification",
+                proposal_cluster_id=cluster.id,
+                rule_pattern=rule_pattern,
+                match_type="embedding",
+            )
 
         return result
 

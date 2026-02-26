@@ -1,6 +1,15 @@
 # MyFinance — Platform Independent Model (PIM)
 
+| | |
+|---|---|
+| **Application version** | v0.2 |
+| **Document version** | v0.2.0 |
+| **Last updated** | 2026-02-26 |
+| **Last code sync** | branch `claude/generate-pim-ontology-8ah2U` @ 2026-02-26 |
+
 > Reverse-engineered from the codebase. Captures the domain semantics of a **personal finance management application with AI-powered transaction classification**.
+>
+> This document describes the **current implemented state** of the application. Proposed evolutions are tracked in separate files under [`docs/evolutions/`](evolutions/).
 
 ---
 
@@ -215,6 +224,7 @@ package "Classification" <<Rectangle>> #FFF3E0 {
     priority : Integer = 0
     isActive : Boolean = true
     createdBy : manual | ai
+    **clusterId : TransactionCluster [0..1]**
     --
     <<invariant>> higher priority first
     <<invariant>> first match wins
@@ -246,6 +256,7 @@ package "Classification" <<Rectangle>> #FFF3E0 {
     rulePattern : String [0..1]
     **customLabel : String [0..1]**
     **excludedIds : Integer [0..*] {JSONB}**
+    **transactionClusterId : TransactionCluster [0..1]**
     --
     accept(category)
     recluster(threshold)
@@ -323,11 +334,12 @@ cluster_id >
 Category "0..1" o-- "0..*" Category : parent >
 
 ClassificationRule "0..*" -- "1" Category : assigns >
-ClassificationRule "0..*" ..> "0..*" Transaction : <<matches>>
-pattern on label_raw >
+ClassificationRule "0..*" -- "0..1" TransactionCluster : <<linked to>>\ncluster_id >
+ClassificationRule "0..*" ..> "0..*" Transaction : <<matches>>\npattern on label_raw >
 
 ClassificationProposal "1" *-down- "0..*" ProposalCluster : contains >
 ProposalCluster "0..*" -- "0..1" Category : suggested >
+ProposalCluster "0..*" -- "0..1" TransactionCluster : <<linked to>>\ntransaction_cluster_id >
 
 TransactionCluster "0..*" -- "0..1" Category : assigned
 category >
@@ -565,78 +577,26 @@ state Error {
 
 ---
 
-### 1f. Implemented vs Proposed: Persistent TransactionCluster
+### 1f. Persistent TransactionCluster Model
 
-> The persistent TransactionCluster model has been **partially implemented**. This section tracks what is now part of the codebase vs what remains proposed.
+> TransactionCluster is a first-class persistent entity, separate from the ephemeral ClassificationProposalCluster used during proposal review.
 
-#### What is IMPLEMENTED
-
-The following evolutions are now live in the codebase:
-
-| Aspect | Status | Implementation |
-|--------|--------|---------------|
-| **TransactionCluster as persistent entity** | Implemented | Separate `transaction_clusters` table with `user_id`, `account_id`, `name`, `description`, `category_id` |
-| **Transaction.cluster_id** | Implemented | FK to `transaction_clusters` with `ondelete=SET NULL` |
-| **Cluster ← Rule link** | Implemented | `TransactionCluster.rule_id` FK back to the rule that created it (on the cluster, not on the rule) |
-| **Cluster ← Proposal link** | Implemented | `TransactionCluster.proposal_cluster_id` FK to the source proposal cluster |
-| **Cluster source tracking** | Implemented | `source ∈ {classification, rule, manual}` — tracks how the cluster was created |
-| **Rich statistics** | Implemented | Amount aggregations (total, avg, min, max, stddev), frequency (avg_days_between, is_recurring, recurrence_pattern), outlier detection (IQR), trend detection (linear regression) |
-| **Rule auto-creates clusters** | Implemented | `apply_rules()` tracks matched txns per rule, creates or merges into a `TransactionCluster` per rule |
-| **Category hierarchy** | Implemented | `Category.level` (1/2/3), `level1_id`, `level2_id` — denormalized navigation fields |
-| **ProposalCluster.excludedIds** | Implemented | JSONB list of excluded transaction IDs during proposal review |
-| **ProposalCluster.customLabel** | Implemented | User-defined label override for a proposal cluster |
-| **UserSession** | Implemented | New entity for session management (token JTI, device info, fingerprint) |
-| **Two-entity architecture** | Implemented | `ClassificationProposalCluster` (ephemeral, for UI review) → creates `TransactionCluster` (persistent) on accept |
-
-#### What remains PROPOSED — Simplified cluster growth via ProposalCluster ↔ TransactionCluster link
-
-> **Key insight**: the `merging` status is no longer needed. Instead, a `ProposalCluster` can optionally reference an existing `TransactionCluster` (via the rule that detected the transactions). On confirmation, the proposal's transactions are merged directly into the existing TC — no intermediate status required. The user can also "detach" the proposal to create an independent cluster.
-
-**New fields required:**
-
-| Field | On Entity | Purpose |
-|-------|-----------|---------|
-| `cluster_id` | `ClassificationRule` | Back-reference from rule to the TransactionCluster it belongs to. Enables automatic linking of proposal clusters to existing TCs. |
-| `transaction_cluster_id` | `ProposalCluster` | Optional FK to an existing TransactionCluster. Set when the proposal was generated by a rule that has `cluster_id`. Null for genuinely new patterns. |
-
-**What changes in behavior:**
-
-| Aspect | Current | Proposed |
-|--------|---------|----------|
-| **Rule → Cluster link** | `TransactionCluster.rule_id` (cluster points to rule) | Bidirectional: also `ClassificationRule.cluster_id` (rule points to cluster) |
-| **Rule auto-creates clusters** | `apply_rules()` immediately creates/merges TCs | Rules only classify (set `category_id`). No auto-creation. Cluster assignment happens via proposal review. |
-| **ProposalCluster linked to TC** | No link | `ProposalCluster.transaction_cluster_id` set when source rule has `cluster_id` |
-| **`merging` status** | Was proposed | **Removed** — replaced by the simpler ProposalCluster ↔ TC link |
-| **UX on accept (linked)** | N/A | Merge txns into existing TC (no rule/cluster creation needed). Option to "detach" and create new TC instead. |
-| **UX on accept (unlinked)** | Creates new TC | Same: create new TC + optionally create rule with `rule.cluster_id` set |
-
-#### Proposed Cluster Lifecycle (target state)
-
-![Proposed Cluster Lifecycle](images/MyFinance_ProposedClusterLifecycle.png)
-
-**Three scenarios on proposal review:**
-
-**Scenario A — Linked proposal (rule with `cluster_id` detected txns):**
-1. Recalculate applies rules → txns get `category_id`
-2. ProposalCluster created with `transaction_cluster_id` = rule's TC
-3. User sees: "X new transactions match cluster *[TC name]*"
-4. User can **exclude** specific txns, then **confirm** → txns get `cluster_id` of existing TC
-5. No new rule or cluster is created — they already exist
-
-**Scenario B — Linked proposal, user detaches:**
-1. Same as A, but user decides these txns are a different pattern
-2. User clicks **"Create new cluster"** → cuts the link with existing TC
-3. Behaves like Scenario C from here: new TC + optionally new rule
-
-**Scenario C — Unlinked proposal (new pattern):**
-1. Recalculate detects a new pattern via embedding clustering
-2. ProposalCluster has `transaction_cluster_id = null`
-3. User reviews: assign category, define label
-4. User **confirms** → creates new `TransactionCluster`
-5. Optionally creates `ClassificationRule` with `rule.cluster_id` pointing to the new TC
-6. Future imports: rule classifies + links proposals back to this TC (Scenario A)
-
-**Why this is better than `merging`:** The `merging` status added complexity without value. The real need is simply: "does this proposal extend an existing cluster or is it new?" A nullable FK on ProposalCluster expresses this cleanly. The UX becomes simpler: confirm = merge, detach = create new.
+| Aspect | Implementation |
+|--------|---------------|
+| **TransactionCluster as persistent entity** | Separate `transaction_clusters` table with `user_id`, `account_id`, `name`, `description`, `category_id` |
+| **Transaction.cluster_id** | FK to `transaction_clusters` with `ondelete=SET NULL` |
+| **Cluster ← Rule link (bidirectional)** | `TransactionCluster.rule_id` FK (cluster → rule) AND `ClassificationRule.cluster_id` FK (rule → cluster). Enables linked proposals on recalculation. |
+| **Cluster ← Proposal link** | `TransactionCluster.proposal_cluster_id` FK to the source proposal cluster |
+| **ProposalCluster → TC link** | `ClassificationProposalCluster.transaction_cluster_id` FK to existing TC. Set when rule with `cluster_id` matched txns. Null for new patterns. |
+| **Cluster source tracking** | `source ∈ {classification, rule, manual}` — tracks how the cluster was created |
+| **Rich statistics** | Amount aggregations (total, avg, min, max, stddev), frequency (avg_days_between, is_recurring, recurrence_pattern), outlier detection (IQR), trend detection (linear regression) |
+| **Rules classify only** | `apply_rules()` sets `category_id` on matched transactions. Does NOT auto-create clusters. Cluster assignment is via proposal review. |
+| **Linked proposals** | During recalculation, rules with `cluster_id` generate linked ProposalClusters. On confirm, txns merge into existing TC. "Detach" creates new TC instead. |
+| **Category hierarchy** | `Category.level` (1/2/3), `level1_id`, `level2_id` — denormalized navigation fields |
+| **ProposalCluster.excludedIds** | JSONB list of excluded transaction IDs during proposal review |
+| **ProposalCluster.customLabel** | User-defined label override for a proposal cluster |
+| **UserSession** | Entity for session management (token JTI, device info, fingerprint) |
+| **Two-entity architecture** | `ClassificationProposalCluster` (ephemeral, for UI review) → creates `TransactionCluster` (persistent) on accept |
 
 ---
 
@@ -712,8 +672,8 @@ The following evolutions are now live in the codebase:
 | Service | Responsibility |
 |---------|---------------|
 | **ImportService** | Parse CSV/Excel/OFX, SHA256 dedup + fuzzy matching (±7 days), label extraction |
-| **RuleService** | Pattern matching (contains/exact/starts_with), priority engine, auto-apply on import, **auto-create/merge clusters per rule** |
-| **ClassificationService** | Embedding clustering (AgglomerativeClustering), proposal management, k-NN classification, **creates persistent TransactionCluster on accept** |
+| **RuleService** | Pattern matching (contains/exact/starts_with), priority engine, auto-apply on import. Rules only classify (set `category_id`), no auto-cluster creation. Returns `rule_matches` for linked proposal generation. |
+| **ClassificationService** | Embedding clustering (AgglomerativeClustering), proposal management, k-NN classification, **creates persistent TransactionCluster on accept**. Generates linked ProposalClusters for rules with `cluster_id`. Supports merge-into-TC and detach workflows. |
 | **EmbeddingService** | sentence-transformers encode(), cosine similarity, cluster detection |
 | **ClusterService** | **CRUD for persistent TransactionCluster, statistics recomputation (amount/frequency/outliers/trends), suggest-pattern, create-from-selection, move transactions** |
 | **ChatService** | LLM orchestration, prompt engineering, dataviz block parsing |
@@ -740,14 +700,16 @@ The following evolutions are now live in the codebase:
 ```
 Import Flow:
   CSV/Excel/OFX → ImportService → dedup → LabelParser → RuleService
-  → auto-categorize + auto-create/merge persistent clusters per rule
+  → auto-categorize (set category_id only, no auto-cluster creation)
   → remaining uncategorized → wait for recalculate
 
 Classification Flow:
-  Recalculate → apply_rules first → LabelParser → EmbeddingService.encode()
-  → AgglomerativeClustering → ClassificationService → proposals (pending clusters)
-  → user reviews → accept → creates persistent TransactionCluster
-  → ClusterService.recompute_statistics() → RuleService (create rules optionally)
+  Recalculate → apply_rules (classify only, return rule_matches)
+  → LabelParser → EmbeddingService.encode() → AgglomerativeClustering
+  → linked ProposalClusters (rules with cluster_id) + unlinked (new patterns)
+  → user reviews → confirm linked → merge into existing TC
+  → confirm unlinked → create new TC + optional rule with cluster_id
+  → ClusterService.recompute_statistics()
 
 Cluster Statistics Flow:
   ClusterService.recompute_statistics(cluster_id) → load member transactions
@@ -1522,7 +1484,7 @@ mf:dedupHash a owl:FunctionalProperty .
 
 ## 4. Semantic Gap Analysis
 
-### 3.1 Business Rules NOT Fully Captured in the Models
+### 4.1 Business Rules NOT Fully Captured in the Models
 
 | # | Rule | Why it cannot be captured |
 |---|------|--------------------------|
@@ -1535,7 +1497,7 @@ mf:dedupHash a owl:FunctionalProperty .
 | 7 | **Cluster representative label selection** (most frequent counterparty) | Statistical selection rule over a set, not expressible in OWL. |
 | 8 | **Soft delete semantics** (queries filter `deleted_at IS NULL`) | Cross-cutting infrastructure concern that affects all query behavior. |
 
-### 3.2 Implicit Domain Knowledge Inferred from Code
+### 4.2 Implicit Domain Knowledge Inferred from Code
 
 | # | Inference | Source |
 |---|-----------|--------|
@@ -1550,11 +1512,11 @@ mf:dedupHash a owl:FunctionalProperty .
 | 9 | **The AI chat assistant can generate data visualizations** (bar, pie, area, kpi charts) as part of its responses, making it more than a simple Q&A bot. | `ai.py` schemas, `chat_service.py` |
 | 10 | **Account archival is a one-way soft operation** — there is no "unarchive" workflow in the current code. | `account_service.py` |
 | 11 | **Category hierarchy uses denormalized navigation fields** (`level`, `level1_id`, `level2_id`) — max 3 levels deep. Computed on creation/update for efficient queries. | `category.py`, `category_service.py` |
-| 12 | **Rules auto-create persistent clusters** — when `apply_rules()` matches transactions, it creates or merges into a `TransactionCluster` per rule, without user review. | `rule_service.py` |
+| 12 | **Rules only classify transactions** — `apply_rules()` sets `category_id` on matched transactions. Cluster assignment is handled via the proposal review workflow (linked ProposalClusters). Rules with `cluster_id` generate linked proposals during recalculation. | `rule_service.py`, `classification_service.py` |
 | 13 | **Cluster statistics are recomputed on demand** — amount aggregations, IQR outlier detection, linear regression trend, recurrence pattern detection. | `cluster_service.py` |
 | 14 | **Export/import categories + rules as YAML** for backup, sharing, or account recreation. | `export_import_service.py` |
 
-### 3.3 Ambiguities and Inconsistencies
+### 4.3 Ambiguities and Inconsistencies
 
 | # | Issue | Details |
 |---|-------|---------|
@@ -1566,7 +1528,7 @@ mf:dedupHash a owl:FunctionalProperty .
 | 6 | **`ImportLog.status` partially unused** | Only `done` status is ever written by the import service. The `pending`, `processing`, and `error` states are defined but not set during the import workflow. |
 | 7 | **Category deletion without cascade** | When a category is deleted, the behavior for transactions referencing it is unspecified. The foreign key has no explicit `ON DELETE` action. |
 
-### 3.4 Suggested Domain Model Refinements
+### 4.4 Suggested Domain Model Refinements
 
 1. **Split `ai_confidence` into `classificationMethod` (enum: rule, user, knn, llm, category_semantics) and `confidenceScore` (float 0.0–1.0).** This eliminates the semantic overloading.
 
@@ -1582,7 +1544,7 @@ mf:dedupHash a owl:FunctionalProperty .
 
 7. ~~**Consider a `RecurringTransaction` concept**~~ — **Resolved**: `TransactionCluster` now tracks `is_recurring`, `recurrence_pattern` (monthly/weekly/quarterly/yearly/irregular), and `avg_days_between`. This provides recurrence detection at the cluster level without a separate entity.
 
-8. ~~**Make TransactionCluster a persistent entity**~~ — **Resolved** (see section 1f). `TransactionCluster` is now a first-class persistent entity with `Transaction.cluster_id`, rich statistics (amount/frequency/outlier/trend), source tracking, and rule/proposal back-links. The `merging` review workflow for rule-matched transactions remains proposed but not yet implemented.
+8. ~~**Make TransactionCluster a persistent entity**~~ — **Resolved** (see section 1f). `TransactionCluster` is now a first-class persistent entity with `Transaction.cluster_id`, rich statistics (amount/frequency/outlier/trend), source tracking, and rule/proposal back-links. See [EVOL-001](evolutions/EVOL-001-simplify-cluster-growth.md) for planned simplification of the cluster growth workflow.
 
 ---
 
@@ -1632,3 +1594,19 @@ mf:dedupHash a owl:FunctionalProperty .
 - The AI chat service's query engine (`query_engine.py`) and financial context builder (`financial_context.py`) were not deeply analyzed — they primarily affect the Conversational AI bounded context's implementation, not the core domain model.
 - The LLM provider abstraction (`llm_provider.py`) is infrastructure, not domain.
 - Possible undocumented business rules embedded in frontend validation logic (React Hook Form + Zod schemas).
+
+---
+
+## 6. Changelog
+
+| Date | Doc Version | App Version | Changes |
+|------|-------------|-------------|---------|
+| 2026-02-26 | v0.2.0 | v0.2 | EVOL-001: Simplified cluster growth — `Rule.cluster_id` and `ProposalCluster.transaction_cluster_id` for linked proposals. Rules no longer auto-create clusters. App versioning (v0.2) with footer display. Evolution docs extracted to `docs/evolutions/`. |
+| 2026-02-26 | v0.1.0 | v0.1 | Initial PIM: domain class diagram, transaction lifecycle, classification workflow, account status, import workflow, persistent cluster model, PSM architecture, RDF/OWL ontology, gap analysis. |
+
+### Pending Evolutions
+
+| ID | Title | Status | Target |
+|----|-------|--------|--------|
+| [EVOL-001](evolutions/EVOL-001-simplify-cluster-growth.md) | Simplify cluster growth via ProposalCluster ↔ TC link | **Implemented** | v0.2 |
+| [EVOL-002](evolutions/EVOL-002-import-tracking.md) | Improve import tracking | Draft | TBD |

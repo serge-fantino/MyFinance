@@ -121,7 +121,13 @@ class RuleService:
     async def apply_rules(self, user: User, account_id: int | None = None) -> dict:
         """Apply all active rules to uncategorized transactions.
 
-        Returns {applied, total_uncategorized}.
+        Rules only classify: they set category_id and ai_confidence on matched
+        transactions. They do NOT auto-create or merge TransactionClusters.
+        Cluster assignment is handled via the proposal review workflow (EVOL-001).
+
+        Returns {applied, total_uncategorized, rule_matches}.
+        rule_matches maps rule.id → list of matched transaction IDs, used by
+        recalculate() to create linked ProposalClusters.
         """
         # Load active rules ordered by priority
         result = await self.db.execute(
@@ -133,7 +139,7 @@ class RuleService:
         rules = list(result.scalars().all())
 
         if not rules:
-            return {"applied": 0, "total_uncategorized": 0}
+            return {"applied": 0, "total_uncategorized": 0, "rule_matches": {}}
 
         # Load uncategorized transactions (exclude those already in a cluster)
         user_accounts = select(Account.id).where(Account.user_id == user.id)
@@ -152,7 +158,7 @@ class RuleService:
         total_uncategorized = len(transactions)
         applied = 0
 
-        # Track which rule matched which transactions (for cluster creation)
+        # Track which rule matched which transactions (for linked proposal creation)
         rule_matches: dict[int, list[int]] = {}  # rule.id → [txn.id, ...]
 
         for txn in transactions:
@@ -168,48 +174,6 @@ class RuleService:
 
         await self.db.flush()
 
-        # Create or merge into persistent clusters for each rule that matched
-        from app.models.transaction_cluster import TransactionCluster
-        from app.services.cluster_service import ClusterService
-        cluster_service = ClusterService(self.db)
-        for rule in rules:
-            matched_ids = rule_matches.get(rule.id, [])
-            if not matched_ids:
-                continue
-
-            # Check if a cluster already exists for this rule
-            existing_result = await self.db.execute(
-                select(TransactionCluster).where(
-                    TransactionCluster.user_id == user.id,
-                    TransactionCluster.rule_id == rule.id,
-                )
-            )
-            existing_cluster = existing_result.scalar_one_or_none()
-
-            if existing_cluster:
-                # Merge new transactions into the existing cluster
-                current_ids = set(existing_cluster.transaction_ids or [])
-                new_ids = list(current_ids | set(matched_ids))
-                await cluster_service.update_cluster(
-                    user=user,
-                    cluster_id=existing_cluster.id,
-                    transaction_ids=new_ids,
-                )
-            else:
-                # Create a new cluster linked to the rule
-                cluster_name = rule.custom_label or rule.pattern
-                await cluster_service.create_cluster(
-                    user=user,
-                    name=cluster_name,
-                    transaction_ids=matched_ids,
-                    account_id=account_id,
-                    category_id=rule.category_id,
-                    source="rule",
-                    rule_id=rule.id,
-                    rule_pattern=rule.pattern,
-                    match_type=rule.match_type,
-                )
-
         logger.info(
             "rules_applied",
             user_id=user.id,
@@ -218,7 +182,11 @@ class RuleService:
             total_uncategorized=total_uncategorized,
         )
 
-        return {"applied": applied, "total_uncategorized": total_uncategorized}
+        return {
+            "applied": applied,
+            "total_uncategorized": total_uncategorized,
+            "rule_matches": rule_matches,
+        }
 
     async def apply_single_rule(self, rule: ClassificationRule, user: User) -> int:
         """Apply a single rule to all matching uncategorized transactions.
