@@ -31,7 +31,7 @@ import type { Category } from "../../types/category.types";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { Button } from "../../components/ui/Button";
 import { Alert } from "../../components/ui/Alert";
-import { Repeat2, TrendingUp, TrendingDown, Minus, ArrowUp, ArrowDown, Copy, ClipboardPaste, Pencil, Check, X, Loader2, Plus, Settings } from "lucide-react";
+import { Repeat2, TrendingUp, TrendingDown, Minus, ArrowUp, ArrowDown, Copy, ClipboardPaste, Pencil, Check, X, Loader2, Plus, Settings, Trash2 } from "lucide-react";
 
 type SortField = "name" | "amount" | "recurrence" | "trend";
 type SortDir = "asc" | "desc";
@@ -1019,8 +1019,11 @@ function ClusterCard({
   const [editingNameInline, setEditingNameInline] = useState(false);
   const [editingCategoryInline, setEditingCategoryInline] = useState(false);
   const [detectionConfigOpen, setDetectionConfigOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
   const hasDetectionConfig = !!(cluster.rule_pattern || cluster.match_type);
   const openDetectionConfig = () => setDetectionConfigOpen(true);
+  const isEmpty = cluster.transaction_count === 0;
 
   useEffect(() => {
     setEditName(cluster.name);
@@ -1097,6 +1100,18 @@ function ClusterCard({
       onUpdated();
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!isEmpty) return;
+    setDeleting(true);
+    try {
+      await clusterService.delete(cluster.id);
+      setDeleteConfirm(false);
+      onUpdated();
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -1181,6 +1196,19 @@ function ClusterCard({
               <span className="text-xs text-muted-foreground shrink-0">
                 {cluster.transaction_count} tx
               </span>
+              {isEmpty && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeleteConfirm(true);
+                  }}
+                  className="p-0.5 rounded hover:bg-red-500/20 text-red-500 hover:text-red-600 shrink-0"
+                  title="Supprimer le cluster (vide)"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
               {cluster.total_amount != null && (
                 <span
                   className={`text-xs font-medium shrink-0 ${
@@ -1426,6 +1454,56 @@ function ClusterCard({
               onClose={() => setDetectionConfigOpen(false)}
               onSaved={onUpdated}
             />
+          )}
+
+          {/* Delete empty cluster */}
+          {isEmpty && (
+            <div className="flex items-center justify-between rounded border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+              <p className="text-sm text-muted-foreground">
+                Ce cluster est vide. Vous pouvez le supprimer.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-red-600 border-red-500/50 hover:bg-red-500/10 hover:text-red-700"
+                disabled={deleting}
+                isLoading={deleting}
+                onClick={() => setDeleteConfirm(true)}
+              >
+                <Trash2 className="w-3.5 h-3.5 mr-1" />
+                Supprimer
+              </Button>
+            </div>
+          )}
+
+          {deleteConfirm && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+              onClick={() => !deleting && setDeleteConfirm(false)}
+            >
+              <div
+                className="bg-card rounded-xl border shadow-lg p-6 max-w-md mx-4"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-lg font-semibold mb-2">Supprimer le cluster</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Supprimer définitivement &quot;{cluster.name}&quot; ? Cette action est irréversible.
+                </p>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setDeleteConfirm(false)} disabled={deleting}>
+                    Annuler
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={handleDelete}
+                    disabled={deleting}
+                    isLoading={deleting}
+                  >
+                    Supprimer
+                  </Button>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Time series */}

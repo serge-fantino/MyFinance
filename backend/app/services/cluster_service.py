@@ -244,10 +244,12 @@ class ClusterService:
         return self._cluster_to_dict(cluster)
 
     async def delete_cluster(self, user: User, cluster_id: int) -> bool:
-        """Delete a cluster."""
+        """Delete a cluster. Only allowed when transaction_count is 0."""
         cluster = await self._get_user_cluster(user, cluster_id)
         if not cluster:
             return False
+        if cluster.transaction_count != 0:
+            raise ValueError("Impossible de supprimer un cluster contenant des transactions.")
         await self.db.delete(cluster)
         await self.db.flush()
         return True

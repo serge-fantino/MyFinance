@@ -188,9 +188,12 @@ async def delete_cluster(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a transaction cluster."""
+    """Delete a transaction cluster. Only allowed when transaction_count is 0."""
     service = ClusterService(db)
-    deleted = await service.delete_cluster(current_user, cluster_id)
+    try:
+        deleted = await service.delete_cluster(current_user, cluster_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not deleted:
         raise HTTPException(status_code=404, detail="Cluster introuvable")
 
