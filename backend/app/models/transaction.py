@@ -26,7 +26,7 @@ class Transaction(Base, TimestampMixin, SoftDeleteMixin):
     subcategory: Mapped[str | None] = mapped_column(String(100), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
-    dedup_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    dedup_hash: Mapped[str] = mapped_column(String(100), nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False)  # import_csv, import_excel, manual
     ai_confidence: Mapped[str | None] = mapped_column(String(10), nullable=True)  # high, medium, low, rule, user, embedding
     parsed_metadata: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)  # structured label metadata

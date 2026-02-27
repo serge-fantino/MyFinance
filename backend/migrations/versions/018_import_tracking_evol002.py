@@ -44,7 +44,10 @@ def upgrade() -> None:
     # 3. Make import_logs.account_id nullable (needed for preview phase before account selection)
     op.alter_column("import_logs", "account_id", existing_type=sa.Integer(), nullable=True)
 
-    # 4. Add import_log_id FK to transactions
+    # 4. Widen dedup_hash to support forced-import suffix (_forced_{row_id})
+    op.alter_column("transactions", "dedup_hash", existing_type=sa.String(64), type_=sa.String(100))
+
+    # 5. Add import_log_id FK to transactions
     op.add_column("transactions", sa.Column("import_log_id", sa.Integer(), nullable=True))
     op.create_foreign_key(
         "fk_transactions_import_log_id",

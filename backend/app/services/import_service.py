@@ -106,7 +106,8 @@ class ImportService:
         log.file_path = rel_path
 
         # Build ImportRows with dedup analysis
-        rows_data = []
+        import_rows: list[ImportRow] = []
+        dup_txn_map: dict[int, Transaction] = {}  # row_index → matched txn
         hash_base_counts: dict[tuple[date, Decimal, str], int] = {}
         imported_count = 0
         duplicate_count = 0
@@ -152,7 +153,8 @@ class ImportService:
                     )
                     self.db.add(row)
                     duplicate_count += 1
-                    rows_data.append(self._row_to_dict(row, existing_txn))
+                    dup_txn_map[i] = existing_txn
+                    import_rows.append(row)
                     continue
 
                 # Check fuzzy duplicate (if account_id is known)
@@ -168,7 +170,8 @@ class ImportService:
                         )
                         self.db.add(row)
                         duplicate_count += 1
-                        rows_data.append(self._row_to_dict(row, fuzzy_match))
+                        dup_txn_map[i] = fuzzy_match
+                        import_rows.append(row)
                         continue
 
                 # Valid row → will be imported on confirm
@@ -180,7 +183,7 @@ class ImportService:
                 )
                 self.db.add(row)
                 imported_count += 1
-                rows_data.append(self._row_to_dict(row))
+                import_rows.append(row)
 
             except Exception as e:
                 row = ImportRow(
@@ -192,12 +195,18 @@ class ImportService:
                 )
                 self.db.add(row)
                 error_count += 1
-                rows_data.append(self._row_to_dict(row))
+                import_rows.append(row)
 
         log.imported_count = imported_count
         log.duplicate_count = duplicate_count
         log.error_count = error_count
-        await self.db.flush()
+        await self.db.flush()  # Assigns IDs to all ImportRow objects
+
+        # Build response dicts (now rows have their IDs)
+        rows_data = [
+            self._row_to_dict(row, dup_txn_map.get(row.row_index))
+            for row in import_rows
+        ]
 
         return {
             "import_log_id": log.id,
