@@ -90,7 +90,7 @@ class TransactionCluster(Base, TimestampMixin):
     category = relationship("Category")
     transactions = relationship("Transaction", back_populates="cluster", foreign_keys="Transaction.cluster_id")
     proposal_cluster = relationship("ClassificationProposalCluster", foreign_keys=[proposal_cluster_id])
-    rule = relationship("ClassificationRule")
+    rule = relationship("ClassificationRule", foreign_keys=[rule_id])
 
     __table_args__ = (
         Index("idx_transaction_clusters_user_account", "user_id", "account_id"),

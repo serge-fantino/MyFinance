@@ -19,6 +19,7 @@ from app.schemas.transaction import (
     ClustersResponse,
     ComputeEmbeddingsResult,
     FileBalanceInfo,
+    ImportConfirmRequest,
     ImportPreviewResult,
     ImportResult,
     InterpretClusterRequest,
@@ -359,81 +360,76 @@ async def delete_transaction(
 @router.post("/import/preview", response_model=ImportPreviewResult)
 async def import_preview(
     file: UploadFile = File(...),
+    account_id: int | None = Query(None, description="Target account (optional at preview time)"),
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Preview file before import. For OFX, returns bank account info from file."""
-    from app.utils.file_parsers import extract_ofx_account_info, parse_csv, parse_excel, parse_ofx
+    """Preview file before import: parse, run dedup analysis, return row-by-row results.
+
+    The file is stored and an ImportLog is created in 'previewing' state.
+    OFX bank/balance info is extracted and returned alongside row details.
+    """
+    from app.utils.file_parsers import extract_ofx_account_info
 
     content = await file.read()
     filename = file.filename or "upload"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
+    # Extract OFX info before preview
+    file_account_info = None
+    file_balance_info = None
     if ext in ("ofx", "qfx", "xml"):
         file_account_info = extract_ofx_account_info(content)
-        file_balance_info = None
         if file_account_info and "balance_date" in file_account_info:
             file_balance_info = FileBalanceInfo(
                 date=file_account_info["balance_date"],
                 amount=file_account_info["balance_amount"],
                 source=file_account_info.get("balance_source", "ledger"),
             )
-        try:
-            txns = parse_ofx(content)
-        except Exception:
-            txns = []
-        return ImportPreviewResult(
-            format="ofx",
-            total_rows=len(txns),
-            file_account_info=file_account_info,
-            file_balance_info=file_balance_info,
-        )
-    if ext in ("csv",):
-        try:
-            txns = parse_csv(content)
-        except Exception:
-            txns = []
-        return ImportPreviewResult(format="csv", total_rows=len(txns), file_account_info=None)
-    if ext in ("xlsx", "xls"):
-        try:
-            txns = parse_excel(content)
-        except Exception:
-            txns = []
-        return ImportPreviewResult(format="excel", total_rows=len(txns), file_account_info=None)
 
-    return ImportPreviewResult(format=ext or "unknown", total_rows=0, file_account_info=None)
+    service = ImportService(db)
+    preview = await service.preview_import(
+        user=current_user,
+        filename=filename,
+        content=content,
+        account_id=account_id,
+    )
+
+    preview["file_account_info"] = file_account_info
+    preview["file_balance_info"] = file_balance_info
+    return preview
 
 
-@router.post("/import", response_model=ImportResult)
-async def import_transactions(
-    account_id: int | None = Query(None, description="Target account (required for use/update, optional for create)"),
-    account_action: str = Query("use", description="use | update | create"),
-    new_account_name: str | None = Query(None, description="For create: name of new account"),
-    apply_balance_reference: bool = Query(False, description="Use OFX balance as calibration point"),
-    file: UploadFile = File(...),
+@router.post("/import/confirm", response_model=ImportResult)
+async def import_confirm(
+    data: ImportConfirmRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Import transactions from a file (CSV, Excel, OFX/QFX/XML).
+    """Confirm an import after preview. Creates transactions for importable rows.
 
     account_action: use (default) | update | create
-    - use: import into selected account
-    - update: import + update account with OFX bank info
-    - create: create new account from OFX info, then import (requires new_account_name)
-
     After a successful import:
     1. Applies user classification rules (fast, deterministic)
     2. Computes embeddings for new transactions (local, no API call)
     """
-    content = await file.read()
-    filename = file.filename or "upload"
-
     from app.utils.file_parsers import extract_ofx_account_info
     from app.services.account_service import AccountService
     from app.schemas.account import AccountCreate, AccountUpdate
+    from app.services.file_service import FileService
 
     target_account_id: int
 
-    if account_action == "create" and new_account_name:
+    if data.account_action == "create" and data.new_account_name:
+        # Read stored file to extract OFX info
+        from app.models.transaction import ImportLog as IL
+        log_q = await db.execute(select(IL).where(IL.id == data.import_log_id, IL.user_id == current_user.id))
+        log = log_q.scalar_one_or_none()
+        if not log or not log.file_path:
+            raise ValidationError("Import introuvable.")
+
+        fs = FileService()
+        content = fs.read_file(log.file_path)
         file_info = extract_ofx_account_info(content)
         if not file_info:
             raise ValidationError("Création de compte : informations bancaires non trouvées dans le fichier OFX.")
@@ -445,7 +441,7 @@ async def import_transactions(
         )
         new_acc = await acc_service.create_account(
             AccountCreate(
-                name=new_account_name,
+                name=data.new_account_name,
                 type="courant" if (file_info.get("acct_type") or "").upper() == "CHECKING" else "courant",
                 currency=file_info.get("currency", "EUR"),
                 bank_name=bank_label or f"Compte {file_info.get('acct_id', '')}",
@@ -455,77 +451,76 @@ async def import_transactions(
             current_user,
         )
         target_account_id = new_acc.id
-    elif account_action == "update":
-        if account_id is None:
+    elif data.account_action == "update":
+        if data.account_id is None:
             raise ValidationError("Compte cible requis pour importer et mettre à jour un compte.")
-        target_account_id = account_id
-        file_info = extract_ofx_account_info(content)
-        if file_info:
-            acc_service = AccountService(db)
-            bank_label = (
-                f"{file_info.get('institution', '') or ''} "
-                f"({file_info.get('bank_id', '')} / {file_info.get('branch_id', '')})".strip()
-                or None
-            )
-            await acc_service.update_account(
-                account_id,
-                AccountUpdate(
-                    bank_name=bank_label or None,
-                    bank_id=file_info.get("bank_id") or None,
-                    branch_id=file_info.get("branch_id") or None,
-                ),
-                current_user,
-            )
+        target_account_id = data.account_id
+        # Update account with OFX info from stored file
+        from app.models.transaction import ImportLog as IL
+        log_q = await db.execute(select(IL).where(IL.id == data.import_log_id, IL.user_id == current_user.id))
+        log = log_q.scalar_one_or_none()
+        if log and log.file_path:
+            fs = FileService()
+            content = fs.read_file(log.file_path)
+            file_info = extract_ofx_account_info(content)
+            if file_info:
+                acc_service = AccountService(db)
+                bank_label = (
+                    f"{file_info.get('institution', '') or ''} "
+                    f"({file_info.get('bank_id', '')} / {file_info.get('branch_id', '')})".strip()
+                    or None
+                )
+                await acc_service.update_account(
+                    data.account_id,
+                    AccountUpdate(
+                        bank_name=bank_label or None,
+                        bank_id=file_info.get("bank_id") or None,
+                        branch_id=file_info.get("branch_id") or None,
+                    ),
+                    current_user,
+                )
     else:  # use
-        if account_id is None:
+        if data.account_id is None:
             raise ValidationError("Compte cible requis pour importer dans un compte existant.")
-        target_account_id = account_id
+        target_account_id = data.account_id
 
     service = ImportService(db)
-    result = await service.import_file(
+    result = await service.confirm_import(
         user=current_user,
+        import_log_id=data.import_log_id,
         account_id=target_account_id,
-        filename=filename,
-        content=content,
+        forced_row_ids=data.forced_row_ids,
     )
 
-    # Apply balance reference from OFX (LEDGERBAL/AVAILBAL) if requested
-    if apply_balance_reference:
-        file_info = extract_ofx_account_info(content)
-        if file_info and "balance_date" in file_info and "balance_amount" in file_info:
-            acc_service = AccountService(db)
-            ref_date = date.fromisoformat(file_info["balance_date"])
-            ref_amount = file_info["balance_amount"]
-            await acc_service.calibrate_balance(
-                target_account_id,
-                current_user,
-                ref_date,
-                ref_amount,
-            )
-            logger.info(
-                "balance_calibrated_from_ofx",
-                account_id=target_account_id,
-                ref_date=file_info["balance_date"],
-                ref_amount=str(ref_amount),
-            )
+    # Apply balance reference from OFX if requested
+    if data.apply_balance_reference:
+        from app.models.transaction import ImportLog as IL
+        log_q = await db.execute(select(IL).where(IL.id == data.import_log_id))
+        log = log_q.scalar_one_or_none()
+        if log and log.file_path:
+            fs = FileService()
+            content = fs.read_file(log.file_path)
+            file_info = extract_ofx_account_info(content)
+            if file_info and "balance_date" in file_info and "balance_amount" in file_info:
+                acc_service = AccountService(db)
+                ref_date = date.fromisoformat(file_info["balance_date"])
+                ref_amount = file_info["balance_amount"]
+                await acc_service.calibrate_balance(
+                    target_account_id, current_user, ref_date, ref_amount,
+                )
 
-    # Auto-classify with rules (fast, no API call)
+    # Auto-classify with rules
     if result["imported_count"] > 0:
         try:
             from app.services.rule_service import RuleService
             rule_service = RuleService(db)
             rule_result = await rule_service.apply_rules(current_user, target_account_id)
             result["rules_applied"] = rule_result["applied"]
-            logger.info(
-                "auto_rules_after_import",
-                imported=result["imported_count"],
-                rules_applied=rule_result["applied"],
-            )
         except Exception as e:
             logger.warning("auto_rules_failed", error=str(e))
             result["rules_applied"] = 0
 
-    # Compute embeddings for new transactions (local, best-effort)
+    # Compute embeddings
     if result["imported_count"] > 0:
         try:
             embedding_service = EmbeddingService(db)
@@ -533,11 +528,6 @@ async def import_transactions(
                 current_user, target_account_id
             )
             result["embeddings_computed"] = emb_result["computed"]
-            logger.info(
-                "auto_embeddings_after_import",
-                imported=result["imported_count"],
-                embeddings_computed=emb_result["computed"],
-            )
         except Exception as e:
             logger.warning("auto_embeddings_failed", error=str(e))
             result["embeddings_computed"] = 0

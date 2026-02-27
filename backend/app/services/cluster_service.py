@@ -139,6 +139,12 @@ class ClusterService:
         )
         await self.db.execute(stmt)
 
+        # EVOL-001: Set bidirectional rule ↔ cluster link
+        if rule_id:
+            rule = await self.db.get(ClassificationRule, rule_id)
+            if rule and rule.user_id == user.id and not rule.cluster_id:
+                rule.cluster_id = cluster.id
+
         # Compute statistics from actual transactions
         await self._recompute_statistics(cluster, user)
         await self.db.flush()
@@ -190,7 +196,7 @@ class ClusterService:
                     rule.category_id = cat_id
                     rule.custom_label = cluster.name or None
             elif create_rule:
-                # Create new rule and link
+                # Create new rule and link (bidirectional: EVOL-001)
                 rule = ClassificationRule(
                     user_id=user.id,
                     pattern=pattern,
@@ -199,6 +205,7 @@ class ClusterService:
                     custom_label=cluster.name or None,
                     is_active=True,
                     created_by="manual",
+                    cluster_id=cluster.id,
                 )
                 self.db.add(rule)
                 await self.db.flush()

@@ -84,9 +84,46 @@ export interface FileBalanceInfo {
   source: string;  // ledger | avail
 }
 
+export interface ImportRowRawData {
+  date: string | null;
+  amount: string | null;
+  label: string;
+  memo: string;
+}
+
+/** Libellé complet comme sur l’écran transactions : label + " — " + memo si présents et différents. */
+export function fullImportLabel(raw: ImportRowRawData | { label?: string | null; memo?: string | null }): string {
+  const label = (raw.label ?? "").trim();
+  const memo = (raw.memo ?? "").trim();
+  if (memo && memo !== label) return (label ? `${label} — ${memo}` : memo) || "—";
+  return label || memo || "—";
+}
+
+export interface ImportRowResponse {
+  id: number;
+  row_index: number;
+  status: "imported" | "duplicate_exact" | "duplicate_fuzzy" | "rejected" | "forced";
+  raw_data: ImportRowRawData;
+  transaction_id: number | null;
+  duplicate_of_id: number | null;
+  duplicate_of_summary: {
+    id: number;
+    date: string;
+    label: string;
+    amount: string;
+  } | null;
+  reject_reason: string | null;
+}
+
 export interface ImportPreviewResult {
+  import_log_id: number;
   format: string;
   total_rows: number;
+  to_import: number;
+  duplicate_count: number;
+  error_count: number;
+  rows: ImportRowResponse[];
+  file_already_imported: boolean;
   file_account_info: {
     bank_id?: string;
     branch_id?: string;
@@ -99,7 +136,17 @@ export interface ImportPreviewResult {
   file_balance_info?: FileBalanceInfo | null;
 }
 
+export interface ImportConfirmRequest {
+  import_log_id: number;
+  account_id: number;
+  forced_row_ids: number[];
+  account_action: "use" | "update" | "create";
+  new_account_name?: string;
+  apply_balance_reference: boolean;
+}
+
 export interface ImportResult {
+  import_log_id?: number;
   total_rows: number;
   imported_count: number;
   duplicate_count: number;
@@ -107,6 +154,39 @@ export interface ImportResult {
   errors: string[] | null;
   rules_applied?: number;
   embeddings_computed?: number;
+}
+
+export interface ImportLogSummary {
+  id: number;
+  account_id: number | null;
+  filename: string;
+  format: string;
+  status: string;
+  total_rows: number | null;
+  imported_count: number | null;
+  duplicate_count: number | null;
+  error_count: number | null;
+  file_size: number | null;
+  file_hash: string | null;
+  created_at: string | null;
+}
+
+export interface ImportDetailResponse {
+  import_log: ImportLogSummary;
+  rows: ImportRowResponse[];
+  file_downloadable: boolean;
+}
+
+export interface ImportHistoryResponse {
+  data: ImportLogSummary[];
+  meta: {
+    total: number;
+    page: number;
+    per_page: number;
+    pages: number;
+    storage_usage_bytes?: number;
+    storage_quota_bytes?: number;
+  };
 }
 
 export interface CashflowMonthly {

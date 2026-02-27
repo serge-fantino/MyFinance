@@ -3,10 +3,14 @@
 from pydantic_settings import BaseSettings
 
 
+APP_VERSION = "0.2.0"
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # App
+    app_version: str = APP_VERSION
     app_env: str = "development"
     app_debug: bool = True
     app_secret_key: str = "change-me"
@@ -66,8 +70,9 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
-    # Upload
+    # Upload & file storage
     max_upload_size_mb: int = 10
+    data_dir: str = "./data"  # MYFINANCE_DATA_DIR: root for file storage (imports, etc.)
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -9,6 +9,9 @@ import type {
   ClusterClassifyResult,
   ClustersResponse,
   ComputeEmbeddingsResult,
+  ImportConfirmRequest,
+  ImportDetailResponse,
+  ImportHistoryResponse,
   ImportPreviewResult,
   ImportResult,
   InterpretClusterRequest,
@@ -84,34 +87,64 @@ export const transactionService = {
     return response.data;
   },
 
-  async importPreview(file: File): Promise<ImportPreviewResult> {
+  async importPreview(file: File, accountId?: number): Promise<ImportPreviewResult> {
     const formData = new FormData();
     formData.append("file", file);
+    const params: Record<string, unknown> = {};
+    if (accountId) params.account_id = accountId;
     const response = await api.post("/transactions/import/preview", formData, {
       headers: { "Content-Type": "multipart/form-data" },
+      params,
     });
     return response.data;
   },
 
-  async import(
-    accountId: number,
-    file: File,
-    accountAction: "use" | "update" | "create" = "use",
-    newAccountName?: string,
-    applyBalanceReference?: boolean
-  ): Promise<ImportResult> {
-    const formData = new FormData();
-    formData.append("file", file);
-    const params = new URLSearchParams({ account_action: accountAction });
-    if (accountAction !== "create") {
-      params.set("account_id", String(accountId));
-    }
-    if (newAccountName) params.set("new_account_name", newAccountName);
-    if (applyBalanceReference) params.set("apply_balance_reference", "true");
-    const response = await api.post(`/transactions/import?${params}`, formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-    });
+  async importConfirm(data: ImportConfirmRequest): Promise<ImportResult> {
+    const response = await api.post("/transactions/import/confirm", data);
     return response.data;
+  },
+
+  // ── Import history ──────────────────────────────────
+
+  async getImportHistory(
+    page = 1,
+    perPage = 20,
+    accountId?: number,
+    status?: string,
+  ): Promise<ImportHistoryResponse> {
+    const params: Record<string, unknown> = { page, per_page: perPage };
+    if (accountId) params.account_id = accountId;
+    if (status) params.status = status;
+    const response = await api.get("/imports", { params });
+    return response.data;
+  },
+
+  async getImportDetail(importId: number): Promise<ImportDetailResponse> {
+    const response = await api.get(`/imports/${importId}`);
+    return response.data;
+  },
+
+  getImportFileUrl(importId: number): string {
+    return `/api/v1/imports/${importId}/file`;
+  },
+
+  async cancelImport(importId: number): Promise<void> {
+    await api.delete(`/imports/${importId}`);
+  },
+
+  /** Delete a draft import (previewing or cancelled): file, log and rows. Frees quota. */
+  async deleteImportDraft(importId: number): Promise<void> {
+    await api.delete(`/imports/${importId}/draft`);
+  },
+
+  /** Force-import a duplicate row a posteriori (import must be done). */
+  async forceImportRow(importId: number, rowId: number): Promise<{ transaction_id: number }> {
+    const response = await api.post(`/imports/${importId}/rows/${rowId}/force`);
+    return response.data;
+  },
+
+  async deleteImportFile(importId: number): Promise<void> {
+    await api.delete(`/imports/${importId}/file`);
   },
 
   // ── Label parsing & embedding classification ───────

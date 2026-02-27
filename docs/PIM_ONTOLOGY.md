@@ -1,6 +1,15 @@
 # MyFinance — Platform Independent Model (PIM)
 
+| | |
+|---|---|
+| **Application version** | v0.2 |
+| **Document version** | v0.2.0 |
+| **Last updated** | 2026-02-26 |
+| **Last code sync** | branch `claude/generate-pim-ontology-8ah2U` @ 2026-02-26 |
+
 > Reverse-engineered from the codebase. Captures the domain semantics of a **personal finance management application with AI-powered transaction classification**.
+>
+> This document describes the **current implemented state** of the application. Proposed evolutions are tracked in separate files under [`docs/evolutions/`](evolutions/).
 
 ---
 
@@ -19,311 +28,331 @@
 skinparam classAttributeIconSize 0
 skinparam linetype ortho
 skinparam groupInheritance 2
+skinparam defaultFontSize 11
+skinparam classFontSize 13
+skinparam classFontStyle bold
+skinparam dpi 150
+skinparam backgroundColor #FEFEFE
 
-title MyFinance — Domain Class Diagram (PIM)
+skinparam class {
+  BackgroundColor #F8F9FA
+  BorderColor #495057
+  ArrowColor #495057
+  FontColor #212529
+  HeaderBackgroundColor #E9ECEF
+}
+
+skinparam stereotype {
+  CBackgroundColor #FFF3CD
+  EBackgroundColor #D1ECF1
+}
+
+title <size:18>MyFinance — Domain Class Diagram (PIM)</size>
+<size:12>Personal Finance Management with AI-Powered Classification</size>
 
 ' ──────────────────────────────────────────────
 ' ENUMERATIONS
 ' ──────────────────────────────────────────────
 
-enum AccountType {
-  courant
-  epargne
-  carte
-  invest
-}
+package "Enumerations" <<Rectangle>> #F0F0F0 {
 
-enum AccountStatus {
-  active
-  archived
-}
+  enum AccountType <<enum>> #E8F4FD {
+    courant
+    epargne
+    carte
+    invest
+  }
 
-enum TransactionSource {
-  import_csv
-  import_excel
-  import_ofx
-  manual
-}
+  enum AccountStatus <<enum>> #E8F4FD {
+    active
+    archived
+  }
 
-enum ClassificationConfidence {
-  high
-  medium
-  low
-  rule
-  user
-  embedding
-}
+  enum TransactionSource <<enum>> #E8F4FD {
+    import_csv
+    import_excel
+    import_ofx
+    manual
+  }
 
-enum PaymentType {
-  card
-  transfer
-  transfer_in
-  direct_debit
-  atm
-  check
-  check_deposit
-  fee
-  subscription
-  refund
-  credit
-}
+  enum ClassificationConfidence <<enum>> #E8F4FD {
+    high
+    medium
+    low
+    rule
+    user
+    embedding
+  }
 
-enum RuleMatchType {
-  contains
-  exact
-  starts_with
-}
+  enum PaymentType <<enum>> #E8F4FD {
+    card
+    transfer
+    transfer_in
+    direct_debit
+    atm
+    check
+    fee
+    subscription
+    refund
+    credit
+  }
 
-enum RuleOrigin {
-  manual
-  ai
-}
+  enum RuleMatchType <<enum>> #E8F4FD {
+    contains
+    exact
+    starts_with
+  }
 
-enum ImportStatus {
-  pending
-  processing
-  done
-  error
-}
+  enum ClusterSource <<enum>> #E8F4FD {
+    classification
+    rule
+    manual
+  }
 
-enum ClusterStatus {
-  pending
-  accepted
-  skipped
-}
-
-enum SuggestionSource {
-  similar_transactions
-  category_semantics
-  llm
-}
-
-enum MessageRole {
-  user
-  assistant
-  system
+  enum RecurrencePattern <<enum>> #E8F4FD {
+    monthly
+    weekly
+    quarterly
+    yearly
+    irregular
+  }
 }
 
 ' ──────────────────────────────────────────────
 ' DOMAIN ENTITIES
 ' ──────────────────────────────────────────────
 
-class User <<aggregate root>> {
-  email : Email «unique»
-  fullName : String
-  isActive : Boolean = true
-  isAdmin : Boolean = false
-  preferences : Map
-  --
-  «invariant» email must be unique
-  «invariant» password ≥ 8 chars, 1 uppercase, 1 digit
+package "Account Management" <<Rectangle>> #E8F5E9 {
+
+  class User <<aggregate root>> #C8E6C9 {
+    email : Email {unique}
+    fullName : String
+    isActive : Boolean = true
+    isAdmin : Boolean = false
+    preferences : Map
+    --
+    {static} <<invariant>> email must be unique
+  }
+
+  class UserSession <<entity>> #C8E6C9 {
+    tokenJti : String {unique}
+    ipAddress : String [0..1]
+    fingerprint : String [0..1]
+    deviceInfo : String [0..1]
+    lastUsedAt : DateTime
+  }
+
+  class Account <<aggregate root>> #C8E6C9 {
+    name : String
+    type : AccountType
+    currency : CurrencyCode = "EUR"
+    bankName : String [0..1]
+    initialBalance : Money = 0.00
+    color : HexColor [0..1]
+    status : AccountStatus = active
+    --
+    <<derived>> currentBalance : Money
+    --
+    <<invariant>> currentBalance =
+      initialBalance + Σ(txn.amount)
+    calibrateBalance(date, amount)
+  }
 }
 
-class Account <<aggregate root>> {
-  name : String
-  type : AccountType
-  currency : CurrencyCode = "EUR"
-  bankName : String [0..1]
-  bankId : String [0..1]
-  branchId : String [0..1]
-  accountNumberEncrypted : String [0..1]
-  initialBalance : Money = 0.00
-  color : HexColor [0..1]
-  status : AccountStatus = active
-  balanceReferenceDate : Date [0..1]
-  balanceReferenceAmount : Money [0..1]
-  --
-  «derived» currentBalance : Money
-  --
-  «invariant» currentBalance = initialBalance + Σ(transactions.amount)
-  «invariant» belongs to exactly one User
-  calibrateBalance(date, knownAmount)
+package "Transaction Management" <<Rectangle>> #E3F2FD {
+
+  class Transaction <<entity>> #BBDEFB {
+    date : Date
+    valueDate : Date [0..1]
+    labelRaw : String
+    labelClean : String [0..1]
+    amount : Money {signed}
+    currency : CurrencyCode = "EUR"
+    tags : String [0..*]
+    dedupHash : String {unique}
+    source : TransactionSource
+    confidence : ClassificationConfidence [0..1]
+    embedding : Vector(384) [0..1]
+    **clusterId : TransactionCluster [0..1]**
+    --
+    <<derived>> effectiveLabel
+    <<derived>> direction (income/expense)
+    <<invariant>> amount > 0 → income
+    <<invariant>> amount < 0 → expense
+  }
+
+  class ParsedMetadata <<value object>> #D1C4E9 {
+    paymentMode : String [0..1]
+    paymentType : PaymentType [0..1]
+    counterparty : String [0..1]
+    cardId : String [0..1]
+    operationDate : Date [0..1]
+    checkNumber : String [0..1]
+  }
+
+  class ImportLog <<entity>> #BBDEFB {
+    filename : String
+    format : String {csv,excel,ofx,qif}
+    status : ImportStatus
+    totalRows : Integer [0..1]
+    importedCount : Integer [0..1]
+    duplicateCount : Integer [0..1]
+    errorCount : Integer [0..1]
+  }
 }
 
-class Transaction <<entity>> {
-  date : Date
-  valueDate : Date [0..1]
-  labelRaw : String
-  labelClean : String [0..1]
-  amount : Money
-  currency : CurrencyCode = "EUR"
-  subcategory : String [0..1]
-  notes : String [0..1]
-  tags : String [0..*]
-  dedupHash : String «unique within active»
-  source : TransactionSource
-  classificationConfidence : ClassificationConfidence [0..1]
-  parsedMetadata : ParsedMetadata [0..1]
-  embedding : Vector(384) [0..1]
-  --
-  «invariant» amount > 0 → income, amount < 0 → expense
-  «invariant» dedupHash unique among non-deleted transactions
-  «derived» effectiveLabel = labelClean ?: labelRaw
-  «derived» direction = amount > 0 ? "income" : "expense"
+package "Classification" <<Rectangle>> #FFF3E0 {
+
+  class Category <<entity>> #FFE0B2 {
+    name : String
+    icon : String [0..1]
+    color : HexColor [0..1]
+    isSystem : Boolean = false
+    **level : Integer = 1**
+    **level1Id : Category [0..1]**
+    **level2Id : Category [0..1]**
+    --
+    <<invariant>> system categories
+      are immutable
+    <<invariant>> level ∈ {1, 2, 3}
+  }
+
+  class ClassificationRule <<entity>> #FFE0B2 {
+    pattern : String
+    matchType : RuleMatchType = contains
+    customLabel : String [0..1]
+    priority : Integer = 0
+    isActive : Boolean = true
+    createdBy : manual | ai
+    **clusterId : TransactionCluster [0..1]**
+    --
+    <<invariant>> higher priority first
+    <<invariant>> first match wins
+    matches(label) : Boolean
+  }
+
+  class ClassificationProposal <<aggregate root>> #FFE0B2 {
+    distanceThreshold : Float = 0.22
+    totalUncategorized : Integer
+    unclusteredCount : Integer
+    --
+    <<invariant>> one per (User, Account)
+    recalculate()
+  }
+
+  class ProposalCluster <<entity>> #FFE0B2 {
+    clusterIndex : Integer
+    representativeLabel : String
+    transactionIds : Integer [1..*] {JSONB}
+    transactionCount : Integer
+    totalAmountAbs : Money
+    suggestedCategoryId : Category [0..1]
+    suggestedCategoryName : String [0..1]
+    suggestionConfidence : String [0..1]
+    suggestionSource : String [0..1]
+    suggestionExplanation : String [0..1]
+    status : pending | accepted | skipped
+    overrideCategoryId : Category [0..1]
+    rulePattern : String [0..1]
+    **customLabel : String [0..1]**
+    **excludedIds : Integer [0..*] {JSONB}**
+    **transactionClusterId : TransactionCluster [0..1]**
+    --
+    accept(category)
+    recluster(threshold)
+  }
 }
 
-class ParsedMetadata <<value object>> {
-  paymentMode : String [0..1]
-  paymentType : PaymentType [0..1]
-  counterparty : String [0..1]
-  cardId : String [0..1]
-  operationDate : Date [0..1]
-  checkNumber : String [0..1]
-  rawDetails : String [0..1]
+package "Persistent Clusters" <<Rectangle>> #E1F5FE {
+
+  class TransactionCluster <<aggregate root>> #B3E5FC {
+    name : String
+    description : String [0..1]
+    source : ClusterSource
+    rulePattern : String [0..1]
+    matchType : String [0..1]
+    ==
+    transactionIds : Integer [0..*] {JSONB}
+    transactionCount : Integer
+    ..
+    **Amount Statistics**
+    totalAmount : Money [0..1]
+    totalAmountAbs : Money [0..1]
+    avgAmount : Money [0..1]
+    minAmount : Money [0..1]
+    maxAmount : Money [0..1]
+    stddevAmount : Money [0..1]
+    ..
+    **Frequency & Recurrence**
+    avgDaysBetween : Float [0..1]
+    isRecurring : Boolean [0..1]
+    recurrencePattern : RecurrencePattern [0..1]
+    firstDate : Date [0..1]
+    lastDate : Date [0..1]
+    ..
+    **Analytics (JSONB)**
+    statistics : Map [0..1]
+    // outlier_ids, trend, trend_slope, cv
+    --
+    recomputeStatistics()
+  }
 }
 
-class Category <<entity>> {
-  name : String
-  icon : String [0..1]
-  color : HexColor [0..1]
-  isSystem : Boolean = false
-  --
-  «invariant» system categories cannot be modified or deleted
-  «invariant» visible categories = system ∪ user-owned
-}
+package "Conversational AI" <<Rectangle>> #FCE4EC {
 
-class ClassificationRule <<entity>> {
-  pattern : String
-  matchType : RuleMatchType = contains
-  customLabel : String [0..1]
-  priority : Integer = 0
-  isActive : Boolean = true
-  createdBy : RuleOrigin = manual
-  --
-  «invariant» higher priority rules evaluated first
-  «invariant» first matching rule wins
-  matches(label) : Boolean
-}
+  class Conversation <<aggregate root>> #F8BBD0 {
+    title : String
+  }
 
-class ImportLog <<entity>> {
-  filename : String
-  format : String
-  status : ImportStatus = pending
-  totalRows : Integer [0..1]
-  importedCount : Integer [0..1]
-  duplicateCount : Integer [0..1]
-  errorCount : Integer [0..1]
-  errorsDetail : Map [0..1]
-}
-
-class ClassificationProposal <<aggregate root>> {
-  distanceThreshold : Float = 0.22
-  totalUncategorized : Integer
-  unclusteredCount : Integer
-  --
-  «invariant» one proposal per (User, Account)
-  recalculate()
-}
-
-class TransactionCluster <<entity>> {
-  clusterIndex : Integer
-  representativeLabel : String
-  transactionIds : Integer [1..*]
-  transactionCount : Integer
-  totalAmountAbs : Money
-  suggestedCategoryName : String [0..1]
-  suggestionConfidence : ClassificationConfidence [0..1]
-  suggestionSource : SuggestionSource [0..1]
-  suggestionExplanation : String [0..1]
-  status : ClusterStatus = pending
-  rulePattern : String [0..1]
-  customLabel : String [0..1]
-  excludedIds : Integer [0..*]
-  --
-  accept(category, rulePattern?)
-  skip()
-  recluster(newThreshold)
-}
-
-class Conversation <<aggregate root>> {
-  title : String = "Nouvelle conversation"
-}
-
-class Message <<entity>> {
-  role : MessageRole
-  content : String
-  metadata : Map [0..1]
-}
-
-' ──────────────────────────────────────────────
-' DOMAIN SERVICES (behavioral, not persisted)
-' ──────────────────────────────────────────────
-
-class DeduplicationService <<domain service>> {
-  computeHash(date, amount, label, index) : String
-  isFuzzyDuplicate(account, date, amount, label) : Boolean
-  --
-  «invariant» hash = SHA256(date|amount|label|index)
-  «invariant» fuzzy match: same amount + normalized label within ±7 days
-}
-
-class LabelParser <<domain service>> {
-  parse(labelRaw) : ParsedMetadata
-  --
-  Extracts payment mode, counterparty,
-  operation date, card ID from French bank labels
-}
-
-class EmbeddingClassifier <<domain service>> {
-  computeEmbedding(text) : Vector(384)
-  suggestCategory(transaction) : CategorySuggestion
-  clusterUncategorized(account, threshold) : Cluster[]
-  --
-  Strategy priority:
-  1. Category semantics (if similarity ≥ 0.62)
-  2. k-NN on classified transactions
-  3. LLM classification (if enabled)
-  4. Category threshold fallback (if ≥ 0.40)
-}
-
-class BalanceCalculator <<domain service>> {
-  «derived» currentBalance(account) : Money
-  «derived» balanceAtDate(account, date) : Money
-  calibrate(account, referenceDate, referenceAmount)
-  --
-  currentBalance = initialBalance + Σ(transactions.amount)
-  calibrate: initialBalance = refAmount - Σ(txns ≤ refDate)
-}
-
-class CashflowAnalyzer <<domain service>> {
-  monthlyCashflow(account?, dateRange?) : CashflowItem[]
-  dailyCashflow(account?, dateRange?) : DailyCashflowItem[]
-  categoryBreakdown(account?, dateRange?, direction?) : CategoryBreakdownItem[]
+  class Message <<entity>> #F8BBD0 {
+    role : user | assistant | system
+    content : String
+    metadata : Map [0..1]
+  }
 }
 
 ' ──────────────────────────────────────────────
 ' RELATIONSHIPS
 ' ──────────────────────────────────────────────
 
-User "1" *-- "0..*" Account : owns >
-User "1" *-- "0..*" Category : creates >
+User "1" *-down- "0..*" Account : owns >
+User "1" *-right- "0..*" Category : creates >
 User "1" *-- "0..*" ClassificationRule : defines >
-User "1" *-- "0..*" Conversation : initiates >
-User "1" *-- "0..*" ClassificationProposal : receives >
+User "1" *-down- "0..*" Conversation : initiates >
+User "1" *-- "0..*" UserSession : has sessions >
+User "1" *-- "0..*" TransactionCluster : owns >
 
-Account "1" *-- "0..*" Transaction : contains >
-Account "1" -- "0..1" ClassificationProposal : has proposal >
-Account "1" *-- "0..*" ImportLog : records imports >
+Account "1" *-down- "0..*" Transaction : contains >
+Account "1" -- "0..1" ClassificationProposal : has >
+Account "1" *-- "0..*" ImportLog : logs >
 
 Transaction "0..*" -- "0..1" Category : classified as >
-Transaction "1" *-- "0..1" ParsedMetadata : has metadata >
+Transaction "1" *-right- "0..1" ParsedMetadata : metadata >
+Transaction "0..*" -- "0..1" TransactionCluster : <<belongs to>>
+cluster_id >
 
-Category "0..1" o-- "0..*" Category : parent / children >
+Category "0..1" o-- "0..*" Category : parent >
 
 ClassificationRule "0..*" -- "1" Category : assigns >
-ClassificationRule "0..*" ..> "0..*" Transaction : «matches»\npattern on label_raw >
+ClassificationRule "0..*" -- "0..1" TransactionCluster : <<linked to>>\ncluster_id >
+ClassificationRule "0..*" ..> "0..*" Transaction : <<matches>>\npattern on label_raw >
 
-ClassificationProposal "1" *-- "0..*" TransactionCluster : contains >
-TransactionCluster "1" -- "1..*" Transaction : «groups»\nvia transaction_ids >
-TransactionCluster "0..1" ..> "0..1" ClassificationRule : «produces»\non accept (create_rule) >
-TransactionCluster "0..*" -- "0..1" Category : suggested category >
-TransactionCluster "0..*" -- "0..1" Category : overridden category >
+ClassificationProposal "1" *-down- "0..*" ProposalCluster : contains >
+ProposalCluster "0..*" -- "0..1" Category : suggested >
+ProposalCluster "0..*" -- "0..1" TransactionCluster : <<linked to>>\ntransaction_cluster_id >
 
-Conversation "1" *-- "0..*" Message : contains >
+TransactionCluster "0..*" -- "0..1" Category : assigned
+category >
+TransactionCluster "0..*" -- "0..1" Account : scoped to >
+TransactionCluster "0..1" -- "0..1" ProposalCluster : <<created from>>
+proposal_cluster_id >
+TransactionCluster "0..1" -- "0..1" ClassificationRule : <<created from>>
+rule_id >
 
-ImportLog "0..*" -- "1" Account : imported into >
+Conversation "1" *-down- "0..*" Message : contains >
 
 @enduml
+
 ```
 
 </details>
@@ -548,58 +577,26 @@ state Error {
 
 ---
 
-### 1f. Proposed Refinement: Persistent TransactionCluster
+### 1f. Persistent TransactionCluster Model
 
-> **Design evolution**: TransactionCluster becomes a persistent, first-class domain entity once accepted. Transactions carry a `cluster_id` reference. Rules carry a `cluster_id` back-reference enabling cluster detection. Recalculate only removes `pending`/`merging` clusters. New transactions can be detected as cluster candidates via two methods — rule-based (on import) and embedding-based (on recalculate) — but **both go through a `merging` review** where the user can exclude specific transactions before confirming cluster membership.
+> TransactionCluster is a first-class persistent entity, separate from the ephemeral ClassificationProposalCluster used during proposal review.
 
-#### Proposed Class Diagram
-
-![Proposed Persistent Cluster Model](images/MyFinance_ProposedCluster.png)
-
-**Key changes from current model:**
-
-| Aspect | Current | Proposed |
-|--------|---------|----------|
-| **Cluster persistence** | Ephemeral — all deleted on recalculate | `accepted` clusters persist, only `pending`/`merging` deleted |
-| **Transaction.clusterId** | Does not exist | `cluster_id : TransactionCluster [0..1]` — a transaction belongs to at most one cluster |
-| **Rule.clusterId** | Does not exist | `cluster_id : TransactionCluster [0..1]` — back-reference to source cluster. When rule matches, auto-assigns `txn.cluster_id` |
-| **Cluster → Rules** | 1 cluster produces 0..1 rule (no back-ref) | Bidirectional: cluster owns 0..* rules, rule references its cluster |
-| **Cluster status** | `pending \| accepted` | `pending \| accepted \| merging` |
-| **Cluster members** | Stored as JSONB `transaction_ids` on cluster | Derived from `SELECT * WHERE cluster_id = X` |
-| **Cluster metrics** | Stored (`transactionCount`, `totalAmountAbs`) | Derived (computed from member transactions) |
-| **Cluster growth (rules)** | Does not exist | Rules with `cluster_id` detect candidate txns on import → creates `merging` proposal → user reviews, can exclude txns → confirms |
-| **Cluster growth (embeddings)** | Does not exist | Recalculate detects embedding similarity → creates `merging` proposal → user reviews, can exclude txns → confirms |
-| **User control** | No cluster persistence | User can **exclude specific transactions** from a merging proposal before confirming — both paths go through `merging` review |
-
-#### Proposed Cluster Lifecycle
-
-![Proposed Cluster Lifecycle](images/MyFinance_ProposedClusterLifecycle.png)
-
-**Two detection methods, one review flow:**
-
-Both paths to grow a cluster go through the **`merging` status**, giving the user full control to **exclude specific transactions** before confirming cluster membership.
-
-**Detection 1 — Rules (on import):**
-1. User accepts a cluster → rules optionally created with `rule.cluster_id` set
-2. New transactions imported → rules applied → sets `txn.category_id`
-3. When a rule with `cluster_id` matches: creates a **`merging` proposal** linking candidate txns to the parent cluster
-4. User reviews: can **exclude** specific txns that don't truly belong
-5. User **confirms** → remaining txns get `cluster_id` → merging deleted
-6. User **rejects** → txns form their own new accepted cluster
-7. User **skips** → merging cluster deleted on next recalculate
-
-**Detection 2 — Embeddings (on recalculate):**
-1. New transactions not matched by any rule remain uncategorized
-2. **Recalculate** detects embedding similarity with accepted cluster centroids
-3. Creates **`merging` proposal**: `status = "merging"`, `parentCluster = accepted cluster`
-4. User reviews: can **exclude** specific txns that don't truly belong
-5. User **confirms** → remaining txns get `cluster_id` → merging deleted
-6. User **rejects** → txns form their own new accepted cluster
-7. User **skips** → merging cluster deleted on next recalculate
-
-**Why `merging` for both paths?** Even when a rule matches, the user may want to manually exclude certain transactions that were incorrectly matched. The `merging` status provides a universal review step before `txn.cluster_id` is permanently assigned.
-
-**Rules without `cluster_id` behave as today** — they only set `category_id`, no cluster assignment. This preserves backward compatibility: a transaction can be classified by a rule without belonging to any cluster.
+| Aspect | Implementation |
+|--------|---------------|
+| **TransactionCluster as persistent entity** | Separate `transaction_clusters` table with `user_id`, `account_id`, `name`, `description`, `category_id` |
+| **Transaction.cluster_id** | FK to `transaction_clusters` with `ondelete=SET NULL` |
+| **Cluster ← Rule link (bidirectional)** | `TransactionCluster.rule_id` FK (cluster → rule) AND `ClassificationRule.cluster_id` FK (rule → cluster). Enables linked proposals on recalculation. |
+| **Cluster ← Proposal link** | `TransactionCluster.proposal_cluster_id` FK to the source proposal cluster |
+| **ProposalCluster → TC link** | `ClassificationProposalCluster.transaction_cluster_id` FK to existing TC. Set when rule with `cluster_id` matched txns. Null for new patterns. |
+| **Cluster source tracking** | `source ∈ {classification, rule, manual}` — tracks how the cluster was created |
+| **Rich statistics** | Amount aggregations (total, avg, min, max, stddev), frequency (avg_days_between, is_recurring, recurrence_pattern), outlier detection (IQR), trend detection (linear regression) |
+| **Rules classify only** | `apply_rules()` sets `category_id` on matched transactions. Does NOT auto-create clusters. Cluster assignment is via proposal review. |
+| **Linked proposals** | During recalculation, rules with `cluster_id` generate linked ProposalClusters. On confirm, txns merge into existing TC. "Detach" creates new TC instead. |
+| **Category hierarchy** | `Category.level` (1/2/3), `level1_id`, `level2_id` — denormalized navigation fields |
+| **ProposalCluster.excludedIds** | JSONB list of excluded transaction IDs during proposal review |
+| **ProposalCluster.customLabel** | User-defined label override for a proposal cluster |
+| **UserSession** | Entity for session management (token JTI, device info, fingerprint) |
+| **Two-entity architecture** | `ClassificationProposalCluster` (ephemeral, for UI review) → creates `TransactionCluster` (persistent) on accept |
 
 ---
 
@@ -646,7 +643,7 @@ Both paths to grow a cluster go through the **`merging` status**, giving the use
 
 | Component | Responsibility |
 |-----------|---------------|
-| **Pages** | DashboardPage, TransactionsPage, ClassificationPage, AnalyticsPage, AIChatPage + QueryPage, SettingsPage |
+| **Pages** | DashboardPage, TransactionsPage, ClassificationPage, AnalyticsPage, AIChatPage + QueryPage, SettingsPage, **AccountPage (Mon compte)** |
 | **Zustand Store** | `auth.store` (user, tokens, isAuthenticated), `ui.store` (sidebar, modals) |
 | **React Query** | Server state cache, auto-refetch on focus, mutation → invalidation |
 | **Axios Client** | Base URL `/api/v1`, request interceptor (JWT), response interceptor (401 → refresh) |
@@ -660,30 +657,40 @@ Both paths to grow a cluster go through the **`merging` status**, giving the use
 |-------------|-----------|---------|
 | `/auth/*` | register, login, refresh | AuthService |
 | `/accounts/*` | CRUD, balance | AccountService |
-| `/transactions/*` | CRUD, import, parse-labels, clusters | TransactionService, ImportService |
-| `/classification/*` | proposals, recalculate | ClassificationService |
+| `/transactions/*` | CRUD, import, parse-labels | TransactionService, ImportService |
+| `/classification/*` | proposals, recalculate, apply | ClassificationService |
 | `/classification-rules/*` | CRUD | RuleService |
+| **`/clusters/*`** | **CRUD, suggest-pattern, create-from-selection, move-txns, recompute-stats, delete-empty** | **ClusterService** |
 | `/analytics/*` | summary, trends | AnalyticsService |
 | `/ai/*` | chat, conversations, query, config, metamodel | ChatService, QueryEngine |
+| `/categories/*` | CRUD, hierarchy | CategoryService |
+| **`/users/*`** | **profile, password, sessions (list/revoke)** | **UserService, SessionService** |
+| **`/export-import/*`** | **export/import categories+rules as YAML** | **ExportImportService** |
 
 **Domain Services**:
 
 | Service | Responsibility |
 |---------|---------------|
 | **ImportService** | Parse CSV/Excel/OFX, SHA256 dedup + fuzzy matching (±7 days), label extraction |
-| **RuleService** | Pattern matching (contains/exact/starts_with), priority engine, auto-apply on import |
-| **ClassificationService** | Embedding clustering (AgglomerativeClustering), proposal management, k-NN classification |
+| **RuleService** | Pattern matching (contains/exact/starts_with), priority engine, auto-apply on import. Rules only classify (set `category_id`), no auto-cluster creation. Returns `rule_matches` for linked proposal generation. |
+| **ClassificationService** | Embedding clustering (AgglomerativeClustering), proposal management, k-NN classification, **creates persistent TransactionCluster on accept**. Generates linked ProposalClusters for rules with `cluster_id`. Supports merge-into-TC and detach workflows. |
 | **EmbeddingService** | sentence-transformers encode(), cosine similarity, cluster detection |
+| **ClusterService** | **CRUD for persistent TransactionCluster, statistics recomputation (amount/frequency/outliers/trends), suggest-pattern, create-from-selection, move transactions** |
 | **ChatService** | LLM orchestration, prompt engineering, dataviz block parsing |
 | **QueryEngine** | DSL → SQLAlchemy compiler, security-first (user_id injected server-side), max 1000 rows |
+| **Metamodel** | **Financial data schema for AI: sources, fields, relationships, temporal functions, aggregators — injected into LLM system prompt** |
 | **LLMProvider** | Abstract interface: OllamaChatProvider, OpenAIChatProvider, AnthropicChatProvider, GeminiChatProvider |
 | **LabelParser** | French bank label parsing (VIREMENT SEPA, CB, PRELEVEMENT...) → structured metadata |
+| **SessionService** | **User session management: list active sessions, revoke tokens, device fingerprinting** |
+| **ExportImportService** | **Export/import categories + classification rules as YAML (backup, sharing, account recreation)** |
+| **CategoryService** | **Category CRUD, hierarchy levels computation (level1/level2 denormalization)** |
+| **UserService** | **Profile management, password change, account deletion** |
 
 #### Data Layer
 
 | Component | Details |
 |-----------|---------|
-| **PostgreSQL 16** | Core tables: users, accounts, transactions, categories, classification_rules, classification_proposals, classification_proposal_clusters, conversations, messages |
+| **PostgreSQL 16** | Core tables: users, **user_sessions**, accounts, transactions, **transaction_clusters**, categories, classification_rules, classification_proposals, classification_proposal_clusters, conversations, messages |
 | **pgvector** | `embedding Vector(384)` on transactions table, enables semantic similarity search |
 | **Redis 7** | Token blacklist, session cache |
 | **Alembic** | 9 migration versions (users → core tables → embeddings → proposals → conversations) |
@@ -693,16 +700,27 @@ Both paths to grow a cluster go through the **`merging` status**, giving the use
 ```
 Import Flow:
   CSV/Excel/OFX → ImportService → dedup → LabelParser → RuleService
-  → auto-categorize → remaining uncategorized → wait for recalculate
+  → auto-categorize (set category_id only, no auto-cluster creation)
+  → remaining uncategorized → wait for recalculate
 
 Classification Flow:
-  Recalculate → EmbeddingService.encode() → AgglomerativeClustering
-  → ClassificationService → proposals (pending/merging clusters)
-  → user reviews → accept/reject/skip → RuleService (create rules)
+  Recalculate → apply_rules (classify only, return rule_matches)
+  → LabelParser → EmbeddingService.encode() → AgglomerativeClustering
+  → linked ProposalClusters (rules with cluster_id) + unlinked (new patterns)
+  → user reviews → confirm linked → merge into existing TC
+  → confirm unlinked → create new TC + optional rule with cluster_id
+  → ClusterService.recompute_statistics()
+
+Cluster Statistics Flow:
+  ClusterService.recompute_statistics(cluster_id) → load member transactions
+  → compute: total/avg/min/max/stddev amount, avg_days_between,
+  → IQR outlier detection, linear regression trend, recurrence pattern
+  → store in TransactionCluster fields + statistics JSONB
 
 Chat Flow:
   User message → ChatService → FinancialContext → LLMProvider.chat()
-  → parse ```dataviz blocks → QueryEngine.execute() → response + charts
+  → parse dataviz blocks → QueryEngine validates against Metamodel
+  → QueryEngine.execute() → response + charts
 
 Query Flow:
   LLM generates {query: DSL, viz: spec} → QueryEngine validates metamodel
@@ -1466,7 +1484,7 @@ mf:dedupHash a owl:FunctionalProperty .
 
 ## 4. Semantic Gap Analysis
 
-### 3.1 Business Rules NOT Fully Captured in the Models
+### 4.1 Business Rules NOT Fully Captured in the Models
 
 | # | Rule | Why it cannot be captured |
 |---|------|--------------------------|
@@ -1479,7 +1497,7 @@ mf:dedupHash a owl:FunctionalProperty .
 | 7 | **Cluster representative label selection** (most frequent counterparty) | Statistical selection rule over a set, not expressible in OWL. |
 | 8 | **Soft delete semantics** (queries filter `deleted_at IS NULL`) | Cross-cutting infrastructure concern that affects all query behavior. |
 
-### 3.2 Implicit Domain Knowledge Inferred from Code
+### 4.2 Implicit Domain Knowledge Inferred from Code
 
 | # | Inference | Source |
 |---|-----------|--------|
@@ -1493,20 +1511,24 @@ mf:dedupHash a owl:FunctionalProperty .
 | 8 | **Embedding model is multilingual** (`paraphrase-multilingual-MiniLM-L12-v2`), supporting the French-language label processing. | `config.py` |
 | 9 | **The AI chat assistant can generate data visualizations** (bar, pie, area, kpi charts) as part of its responses, making it more than a simple Q&A bot. | `ai.py` schemas, `chat_service.py` |
 | 10 | **Account archival is a one-way soft operation** — there is no "unarchive" workflow in the current code. | `account_service.py` |
+| 11 | **Category hierarchy uses denormalized navigation fields** (`level`, `level1_id`, `level2_id`) — max 3 levels deep. Computed on creation/update for efficient queries. | `category.py`, `category_service.py` |
+| 12 | **Rules only classify transactions** — `apply_rules()` sets `category_id` on matched transactions. Cluster assignment is handled via the proposal review workflow (linked ProposalClusters). Rules with `cluster_id` generate linked proposals during recalculation. | `rule_service.py`, `classification_service.py` |
+| 13 | **Cluster statistics are recomputed on demand** — amount aggregations, IQR outlier detection, linear regression trend, recurrence pattern detection. | `cluster_service.py` |
+| 14 | **Export/import categories + rules as YAML** for backup, sharing, or account recreation. | `export_import_service.py` |
 
-### 3.3 Ambiguities and Inconsistencies
+### 4.3 Ambiguities and Inconsistencies
 
 | # | Issue | Details |
 |---|-------|---------|
 | 1 | **`ai_confidence` overloaded semantics** | The field serves dual purpose: it indicates both the _method_ of classification (rule, user, embedding) and the _confidence level_ (high, medium, low). These are orthogonal concepts merged into a single field. A cleaner model would separate `classification_method` from `confidence_score`. |
 | 2 | **`subcategory` field on Transaction is underutilized** | The field exists on the model but is never populated by any service. Its relationship to the Category hierarchy is unclear — is it a freeform string or should it map to child categories? |
-| 3 | **Cluster `status` enum inconsistency** | The model defines `pending` and `accepted` as defaults, but the schema also references `skipped`. The `skipped` status has no behavioral consequence in the current code. |
+| 3 | **Two-entity cluster architecture** | `ClassificationProposalCluster` (ephemeral, for proposal UI) is separate from `TransactionCluster` (persistent). The proposal cluster has `status: pending/accepted/skipped`, while the persistent cluster has no status field. The relationship is tracked via `TransactionCluster.proposal_cluster_id`. |
 | 4 | **Missing `value_date` handling** | The `value_date` field is stored but never used in balance calculations, cashflow, or analytics. All computations use `date` only. |
 | 5 | **No explicit "inter-account transfer" detection** | The category "Virement entre comptes" exists, but there is no domain logic to automatically detect that two transactions in different accounts are the same transfer. They remain independent. |
 | 6 | **`ImportLog.status` partially unused** | Only `done` status is ever written by the import service. The `pending`, `processing`, and `error` states are defined but not set during the import workflow. |
 | 7 | **Category deletion without cascade** | When a category is deleted, the behavior for transactions referencing it is unspecified. The foreign key has no explicit `ON DELETE` action. |
 
-### 3.4 Suggested Domain Model Refinements
+### 4.4 Suggested Domain Model Refinements
 
 1. **Split `ai_confidence` into `classificationMethod` (enum: rule, user, knn, llm, category_semantics) and `confidenceScore` (float 0.0–1.0).** This eliminates the semantic overloading.
 
@@ -1520,9 +1542,9 @@ mf:dedupHash a owl:FunctionalProperty .
 
 6. **Implement the full ImportLog state machine** (pending → processing → done/error) for better observability.
 
-7. **Consider a `RecurringTransaction` concept** to model subscriptions and regular income (salary), enabling forecasting and anomaly detection.
+7. ~~**Consider a `RecurringTransaction` concept**~~ — **Resolved**: `TransactionCluster` now tracks `is_recurring`, `recurrence_pattern` (monthly/weekly/quarterly/yearly/irregular), and `avg_days_between`. This provides recurrence detection at the cluster level without a separate entity.
 
-8. **Make TransactionCluster a persistent entity** (see section 1f). Currently clusters are ephemeral proposals deleted on every recalculate. The proposed evolution makes accepted clusters persistent, adds `Transaction.cluster_id`, introduces a `merging` status for extending clusters with newly imported transactions, and supports multiple rules per cluster. This resolves the loss of classification history and enables cluster-based analytics.
+8. ~~**Make TransactionCluster a persistent entity**~~ — **Resolved** (see section 1f). `TransactionCluster` is now a first-class persistent entity with `Transaction.cluster_id`, rich statistics (amount/frequency/outlier/trend), source tracking, and rule/proposal back-links. See [EVOL-001](evolutions/EVOL-001-simplify-cluster-growth.md) for planned simplification of the cluster growth workflow.
 
 ---
 
@@ -1572,3 +1594,19 @@ mf:dedupHash a owl:FunctionalProperty .
 - The AI chat service's query engine (`query_engine.py`) and financial context builder (`financial_context.py`) were not deeply analyzed — they primarily affect the Conversational AI bounded context's implementation, not the core domain model.
 - The LLM provider abstraction (`llm_provider.py`) is infrastructure, not domain.
 - Possible undocumented business rules embedded in frontend validation logic (React Hook Form + Zod schemas).
+
+---
+
+## 6. Changelog
+
+| Date | Doc Version | App Version | Changes |
+|------|-------------|-------------|---------|
+| 2026-02-26 | v0.2.0 | v0.2 | EVOL-001: Simplified cluster growth — `Rule.cluster_id` and `ProposalCluster.transaction_cluster_id` for linked proposals. Rules no longer auto-create clusters. App versioning (v0.2) with footer display. Evolution docs extracted to `docs/evolutions/`. |
+| 2026-02-26 | v0.1.0 | v0.1 | Initial PIM: domain class diagram, transaction lifecycle, classification workflow, account status, import workflow, persistent cluster model, PSM architecture, RDF/OWL ontology, gap analysis. |
+
+### Pending Evolutions
+
+| ID | Title | Status | Target |
+|----|-------|--------|--------|
+| [EVOL-001](evolutions/EVOL-001-simplify-cluster-growth.md) | Simplify cluster growth via ProposalCluster ↔ TC link | **Implemented** | v0.2 |
+| [EVOL-002](evolutions/EVOL-002-import-tracking.md) | Extended import tracking with file storage, duplicate review & import history | **Proposed** | v0.3 |

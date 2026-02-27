@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.config import settings
+from app.config import APP_VERSION, settings
 from app.core.database import async_session_factory, engine
 from app.core.middleware import RequestLoggingMiddleware
 
@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="MyFinance API",
     description="API de gestion de finances personnelles avec IA",
-    version="0.1.0",
+    version=APP_VERSION,
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -52,7 +52,7 @@ app.add_middleware(RequestLoggingMiddleware)
 @app.get("/health", tags=["system"])
 async def health_check():
     """Liveness probe — always returns healthy if the process is running."""
-    return {"status": "healthy", "version": "0.1.0"}
+    return {"status": "healthy", "version": APP_VERSION}
 
 
 @app.get("/ready", tags=["system"])
@@ -81,6 +81,7 @@ from app.api.v1 import (  # noqa: E402
     classification_rules,
     clusters,
     export_import,
+    imports,
     transactions,
     users,
 )
@@ -96,3 +97,4 @@ app.include_router(clusters.router, prefix="/api/v1/clusters", tags=["clusters"]
 app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
 app.include_router(ai.router, prefix="/api/v1/ai", tags=["ai"])
 app.include_router(export_import.router, prefix="/api/v1/export-import", tags=["export-import"])
+app.include_router(imports.router, prefix="/api/v1/imports", tags=["imports"])

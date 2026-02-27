@@ -11,6 +11,10 @@ class ClassificationRule(Base, TimestampMixin):
 
     When a transaction's label_raw matches the pattern (according to match_type),
     the rule assigns the category and optionally sets a custom clean label.
+
+    If cluster_id is set, the rule is linked to a persistent TransactionCluster.
+    During recalculation, matched transactions generate a linked ProposalCluster
+    rather than being auto-assigned to the cluster.
     """
 
     __tablename__ = "classification_rules"
@@ -28,7 +32,13 @@ class ClassificationRule(Base, TimestampMixin):
     created_by: Mapped[str] = mapped_column(
         String(20), default="manual"
     )  # manual, ai
+    cluster_id: Mapped[int | None] = mapped_column(
+        ForeignKey("transaction_clusters.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Relationships
     user = relationship("User")
     category = relationship("Category")
+    cluster = relationship("TransactionCluster", foreign_keys=[cluster_id])

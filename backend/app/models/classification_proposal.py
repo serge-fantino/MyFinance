@@ -66,5 +66,11 @@ class ClassificationProposalCluster(Base):
     rule_pattern: Mapped[str | None] = mapped_column(String(500), nullable=True)
     custom_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     excluded_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    transaction_cluster_id: Mapped[int | None] = mapped_column(
+        ForeignKey("transaction_clusters.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     proposal = relationship("ClassificationProposal", back_populates="clusters")
+    transaction_cluster = relationship("TransactionCluster", foreign_keys=[transaction_cluster_id])
