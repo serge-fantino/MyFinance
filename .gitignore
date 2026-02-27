@@ -51,3 +51,6 @@ logs/
 
 # Database
 *.sql.bak
+
+# Runtime data (file imports, uploads)
+backend/data/
