@@ -72,6 +72,7 @@ npm run dev
 
 - [Spécifications fonctionnelles](docs/SPECS.md)
 - [Architecture & Infrastructure](docs/ARCHITECTURE.md)
+- [Tests](docs/TESTING.md)
 - [Backlog](docs/BACKLOG.md)
 
 ## Licence
