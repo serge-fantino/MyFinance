@@ -1609,4 +1609,4 @@ mf:dedupHash a owl:FunctionalProperty .
 | ID | Title | Status | Target |
 |----|-------|--------|--------|
 | [EVOL-001](evolutions/EVOL-001-simplify-cluster-growth.md) | Simplify cluster growth via ProposalCluster ↔ TC link | **Implemented** | v0.2 |
-| [EVOL-002](evolutions/EVOL-002-import-tracking.md) | Improve import tracking | Draft | TBD |
+| [EVOL-002](evolutions/EVOL-002-import-tracking.md) | Extended import tracking with file storage, duplicate review & import history | **Proposed** | v0.3 |
