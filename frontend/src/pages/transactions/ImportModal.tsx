@@ -1,19 +1,22 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/Button";
 import { Alert } from "../../components/ui/Alert";
 import { Input } from "../../components/ui/Input";
 import { transactionService } from "../../services/transaction.service";
 import type { Account } from "../../types/account.types";
 import type { ImportPreviewResult, ImportResult, ImportRowResponse } from "../../types/transaction.types";
+import { fullImportLabel } from "../../types/transaction.types";
 
 interface ImportModalProps {
   accounts: Account[];
+  /** When set, modal opens in resume mode: load this import and show preview step. */
+  resumeImportLogId?: number;
   onClose: (refreshNeeded: boolean) => void;
 }
 
 type ImportStep = "form" | "confirm" | "preview" | "result";
 
-export function ImportModal({ accounts, onClose }: ImportModalProps) {
+export function ImportModal({ accounts, resumeImportLogId, onClose }: ImportModalProps) {
   const [accountId, setAccountId] = useState<string>(accounts[0]?.id.toString() || "");
   const [file, setFile] = useState<File | null>(null);
   const [step, setStep] = useState<ImportStep>("form");
@@ -25,7 +28,59 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [forcedRowIds, setForcedRowIds] = useState<Set<number>>(new Set());
+  const [duplicatesOpen, setDuplicatesOpen] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Resume mode: load import detail and show preview step
+  useEffect(() => {
+    if (resumeImportLogId == null || accounts.length === 0) return;
+    let cancelled = false;
+    setError(null);
+    setIsUploading(true);
+    transactionService
+      .getImportDetail(resumeImportLogId)
+      .then((detail) => {
+        if (cancelled) return;
+        const log = detail.import_log;
+        if (log.status !== "previewing" && log.status !== "cancelled") {
+          setError("Cet import ne peut plus être repris.");
+          setIsUploading(false);
+          return;
+        }
+        const toImport = detail.rows.filter(
+          (r) => r.status === "imported" || r.status === "forced"
+        ).length;
+        const synthetic: ImportPreviewResult = {
+          import_log_id: log.id,
+          format: log.format,
+          total_rows: log.total_rows ?? 0,
+          to_import: toImport,
+          duplicate_count: log.duplicate_count ?? 0,
+          error_count: log.error_count ?? 0,
+          rows: detail.rows,
+          file_already_imported: false,
+          file_account_info: null,
+          file_balance_info: undefined,
+        };
+        setPreview(synthetic);
+        setForcedRowIds(new Set());
+        setStep("preview");
+        const defaultAccount =
+          log.account_id != null && accounts.some((a) => a.id === log.account_id)
+            ? String(log.account_id)
+            : accounts[0]?.id.toString() ?? "";
+        setAccountId(defaultAccount);
+      })
+      .catch(() => {
+        if (!cancelled) setError("Impossible de charger l’import.");
+      })
+      .finally(() => {
+        if (!cancelled) setIsUploading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [resumeImportLogId, accounts]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -63,6 +118,8 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
       if (hasOfxInfo && (accounts.length > 0 || canCreateFromOfx)) {
         setStep("confirm");
         if (canProceedWithoutAccount) setAccountAction("create");
+        // Par défaut, utiliser le solde du fichier comme point de référence si disponible
+        setApplyBalanceReference(!!previewResult.file_balance_info);
       } else {
         // Go directly to preview for non-OFX files
         setStep("preview");
@@ -121,18 +178,94 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
   ) || [];
   const errorRows = preview?.rows.filter((r) => r.status === "rejected") || [];
 
+  const draftId = preview?.import_log_id ?? null;
+  const [closeMenuOpen, setCloseMenuOpen] = useState(false);
+  const closeMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!closeMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (closeMenuRef.current && !closeMenuRef.current.contains(e.target as Node)) {
+        setCloseMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [closeMenuOpen]);
+
+  const handleSupprimerBrouillon = async () => {
+    setCloseMenuOpen(false);
+    if (draftId != null) {
+      try {
+        await transactionService.deleteImportDraft(draftId);
+      } catch {
+        // ignore
+      }
+    }
+    onClose(true);
+  };
+
+  const handleGarderBrouillon = () => {
+    setCloseMenuOpen(false);
+    onClose(false);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={() => onClose(!!result)} />
+      <div className="absolute inset-0 bg-black/50" aria-hidden />
 
       <div className="relative bg-card rounded-xl shadow-xl border w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
         <div className="p-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
           <h2 className="text-xl font-semibold mb-1">Importer des transactions</h2>
           <p className="text-sm text-muted-foreground mb-6">
             {step === "preview"
               ? "Vérifiez les transactions avant de confirmer l'import."
               : "Importez un relevé bancaire au format OFX, CSV ou Excel."}
           </p>
+            </div>
+            <div className="relative shrink-0" ref={closeMenuRef}>
+              <button
+                type="button"
+                onClick={() =>
+                  step === "result" ? onClose(true) : setCloseMenuOpen((o) => !o)
+                }
+                className="p-2 rounded-lg hover:bg-muted transition-colors"
+                aria-label="Fermer"
+                aria-expanded={closeMenuOpen ? "true" : "false"}
+                aria-haspopup="menu"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              {closeMenuOpen && step !== "result" && (
+                <div
+                  className="absolute right-0 top-full mt-1 py-1 min-w-[180px] bg-card border rounded-lg shadow-lg z-10"
+                  role="menu"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted disabled:opacity-50 disabled:pointer-events-none"
+                    onClick={handleSupprimerBrouillon}
+                    disabled={draftId == null}
+                  >
+                    Supprimer le brouillon
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted"
+                    onClick={handleGarderBrouillon}
+                  >
+                    Garder en brouillon
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
 
           {error && <Alert variant="destructive" className="mb-4">{error}</Alert>}
 
@@ -159,6 +292,28 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                 )}
               </div>
 
+              {resumeImportLogId != null && (
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium" htmlFor="resume-import-account">
+                    Compte cible
+                  </label>
+                  <select
+                    id="resume-import-account"
+                    value={accountId}
+                    onChange={(e) => setAccountId(e.target.value)}
+                    aria-label="Compte cible"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <option value="">Choisir un compte</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {preview.file_already_imported && (
                 <Alert variant="destructive">
                   Ce fichier a déjà été importé. Les transactions en doublon seront ignorées.
@@ -178,33 +333,47 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
               {/* Duplicate rows */}
               {duplicateRows.length > 0 && (
                 <div className="space-y-2">
-                  <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-300">
+                  <button
+                    type="button"
+                    onClick={() => setDuplicatesOpen((open) => !open)}
+                    className="text-sm font-medium text-yellow-700 dark:text-yellow-300 flex items-center gap-2"
+                  >
+                    <svg
+                      className={`w-3.5 h-3.5 transition-transform ${duplicatesOpen ? "rotate-90" : ""}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
                     Doublons ({duplicateRows.length})
-                  </h4>
-                  <div className="border rounded-lg overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-yellow-50 dark:bg-yellow-900/20">
-                        <tr>
-                          <th className="px-3 py-2 text-left w-8">Forcer</th>
-                          <th className="px-3 py-2 text-left">#</th>
-                          <th className="px-3 py-2 text-left">Date</th>
-                          <th className="px-3 py-2 text-left">Libellé</th>
-                          <th className="px-3 py-2 text-right">Montant</th>
-                          <th className="px-3 py-2 text-left">Type</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {duplicateRows.map((row) => (
-                          <DuplicateRow
-                            key={row.id}
-                            row={row}
-                            forced={forcedRowIds.has(row.id)}
-                            onToggle={() => toggleForceRow(row.id)}
-                          />
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  </button>
+                  {duplicatesOpen && (
+                    <div className="border rounded-lg overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead className="bg-yellow-50 dark:bg-yellow-900/20">
+                          <tr>
+                            <th className="px-3 py-2 text-left w-8">Forcer</th>
+                            <th className="px-3 py-2 text-left">#</th>
+                            <th className="px-3 py-2 text-left">Date</th>
+                            <th className="px-3 py-2 text-left">Libellé</th>
+                            <th className="px-3 py-2 text-right">Montant</th>
+                            <th className="px-3 py-2 text-left">Type</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {duplicateRows.map((row) => (
+                            <DuplicateRow
+                              key={row.id}
+                              row={row}
+                              forced={forcedRowIds.has(row.id)}
+                              onToggle={() => toggleForceRow(row.id)}
+                            />
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -229,13 +398,20 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                   type="button"
                   variant="outline"
                   className="flex-1"
-                  onClick={() => setStep(fileAccountInfo ? "confirm" : "form")}
+                  onClick={() =>
+                    resumeImportLogId != null
+                      ? onClose(false)
+                      : setStep(fileAccountInfo ? "confirm" : "form")
+                  }
                 >
                   Retour
                 </Button>
                 <Button
                   className="flex-1"
-                  disabled={importableRows.length === 0}
+                  disabled={
+                    importableRows.length === 0 ||
+                    (resumeImportLogId != null && !accountId)
+                  }
                   isLoading={isUploading}
                   onClick={doConfirmImport}
                 >
@@ -466,9 +642,13 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
               <Button className="w-full" onClick={() => onClose(true)}>Fermer</Button>
             </div>
           ) : (
-            /* ── Step: Form ── */
+            /* ── Step: Form (or loading when resuming) ── */
             <div className="space-y-4">
-              {!canProceedWithoutAccount && (
+              {resumeImportLogId != null && isUploading ? (
+                <div className="py-8 text-center text-muted-foreground">
+                  Chargement de l'import…
+                </div>
+              ) : !canProceedWithoutAccount ? (
                 <div className="space-y-1.5">
                   <label className="block text-sm font-medium">Compte cible</label>
                   <select
@@ -481,7 +661,7 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                     ))}
                   </select>
                 </div>
-              )}
+              ) : null}
               {canProceedWithoutAccount && (
                 <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
                   <p className="font-medium">Aucun compte existant</p>
@@ -491,6 +671,8 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                 </div>
               )}
 
+              {!(resumeImportLogId != null && isUploading) && (
+                <>
               {/* Drop zone */}
               <div
                 onClick={() => fileInputRef.current?.click()}
@@ -544,6 +726,8 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                   {isOfxFile ? "Suivant" : "Analyser"}
                 </Button>
               </div>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -600,7 +784,7 @@ function RowSection({
                 <tr key={row.id} className="hover:bg-muted/30">
                   <td className="px-3 py-1.5 text-muted-foreground">{row.row_index + 1}</td>
                   <td className="px-3 py-1.5">{row.raw_data.date || "—"}</td>
-                  <td className="px-3 py-1.5 truncate max-w-[250px]">{row.raw_data.label || "—"}</td>
+                  <td className="px-3 py-1.5">{fullImportLabel(row.raw_data)}</td>
                   <td className="px-3 py-1.5 text-right font-mono">{row.raw_data.amount || "—"}</td>
                 </tr>
               ))}
@@ -636,7 +820,7 @@ function DuplicateRow({
         </td>
         <td className="px-3 py-1.5 text-muted-foreground">{row.row_index + 1}</td>
         <td className="px-3 py-1.5">{row.raw_data.date || "—"}</td>
-        <td className="px-3 py-1.5 truncate max-w-[200px]">{row.raw_data.label || "—"}</td>
+        <td className="px-3 py-1.5">{fullImportLabel(row.raw_data)}</td>
         <td className="px-3 py-1.5 text-right font-mono">{row.raw_data.amount || "—"}</td>
         <td className="px-3 py-1.5">
           <span className={`text-[10px] px-1.5 py-0.5 rounded ${

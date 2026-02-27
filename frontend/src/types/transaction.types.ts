@@ -84,16 +84,26 @@ export interface FileBalanceInfo {
   source: string;  // ledger | avail
 }
 
+export interface ImportRowRawData {
+  date: string | null;
+  amount: string | null;
+  label: string;
+  memo: string;
+}
+
+/** Libellé complet comme sur l’écran transactions : label + " — " + memo si présents et différents. */
+export function fullImportLabel(raw: ImportRowRawData | { label?: string | null; memo?: string | null }): string {
+  const label = (raw.label ?? "").trim();
+  const memo = (raw.memo ?? "").trim();
+  if (memo && memo !== label) return (label ? `${label} — ${memo}` : memo) || "—";
+  return label || memo || "—";
+}
+
 export interface ImportRowResponse {
   id: number;
   row_index: number;
   status: "imported" | "duplicate_exact" | "duplicate_fuzzy" | "rejected" | "forced";
-  raw_data: {
-    date: string | null;
-    amount: string | null;
-    label: string;
-    memo: string;
-  };
+  raw_data: ImportRowRawData;
   transaction_id: number | null;
   duplicate_of_id: number | null;
   duplicate_of_summary: {
@@ -174,6 +184,8 @@ export interface ImportHistoryResponse {
     page: number;
     per_page: number;
     pages: number;
+    storage_usage_bytes?: number;
+    storage_quota_bytes?: number;
   };
 }
 

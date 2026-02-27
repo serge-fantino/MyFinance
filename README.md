@@ -33,6 +33,35 @@ MyFinance est une application moderne qui permet à chaque utilisateur de gérer
 - Node.js 20+ (développement frontend)
 - Python 3.12+ (développement backend)
 
+### Lancement rapide avec `make` (recommandé)
+
+```bash
+# Cloner le repository
+git clone https://github.com/<your-org>/myfinance.git
+cd myfinance
+
+# Copier la configuration backend (puis éditer backend/.env pour ajouter vos clés)
+cp .env.example backend/.env
+
+# Première installation (backend, frontend, infrastructure de dev…)
+make setup
+
+# Lancer tout l'environnement de développement (DB + Redis + backend + frontend)
+make dev
+
+# Quand vous avez fini de travailler
+make stop
+```
+
+Quelques commandes `make` utiles :
+
+- **`make help`** : affiche la liste des commandes disponibles avec une courte description  
+- **`make dev`** : lance l'environnement complet de développement (base de données, Redis, backend, frontend)  
+- **`make dev-infra`** : ne lance que l'infrastructure (PostgreSQL, Redis, Adminer)  
+- **`make dev-back`** / **`make dev-front`** : lance uniquement le backend ou le frontend  
+- **`make docker-up`** / **`make docker-down`** : lance/arrête la stack complète en Docker (mode plus proche production)  
+- **`make test`** : exécute tous les tests (backend + frontend)
+
 ### Lancement avec Docker Compose
 
 ```bash

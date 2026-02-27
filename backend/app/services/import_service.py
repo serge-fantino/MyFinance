@@ -5,7 +5,7 @@ import re
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -76,6 +76,22 @@ class ImportService:
 
         # Compute file hash and check for re-import
         file_hash = self.file_service.compute_hash(content)
+
+        # Enforce per-user storage quota (10 MiB on original files)
+        max_bytes = 10 * 1024 * 1024
+        usage_q = await self.db.execute(
+            select(func.coalesce(func.sum(ImportLog.file_size), 0)).where(
+                ImportLog.user_id == user.id,
+                ImportLog.file_path.is_not(None),
+            )
+        )
+        current_usage = int(usage_q.scalar() or 0)
+        projected_usage = current_usage + len(content)
+        if projected_usage > max_bytes:
+            raise ValidationError(
+                "Quota de stockage des fichiers d'import dépassé (10 Mo par utilisateur). "
+                "Supprimez des fichiers source d'imports existants avant d'en ajouter de nouveaux."
+            )
         file_already_imported = False
         existing_import = await self.db.execute(
             select(ImportLog).where(
@@ -101,7 +117,7 @@ class ImportService:
         self.db.add(log)
         await self.db.flush()
 
-        # Store file
+        # Store file (compressed on disk)
         rel_path = self.file_service.store_file(user.id, log.id, filename, content)
         log.file_path = rel_path
 
@@ -355,7 +371,7 @@ class ImportService:
     # ── Cancel ────────────────────────────────────────────────────────
 
     async def cancel_import(self, user: User, import_log_id: int) -> None:
-        """Cancel a previewing import."""
+        """Cancel a previewing import (set status to cancelled)."""
         result = await self.db.execute(
             select(ImportLog).where(ImportLog.id == import_log_id, ImportLog.user_id == user.id)
         )
@@ -365,6 +381,40 @@ class ImportService:
         if log.status != "previewing":
             raise ValidationError(f"Seul un import en preview peut être annulé (status: {log.status}).")
         log.status = "cancelled"
+        await self.db.flush()
+
+    async def delete_import_draft(self, user: User, import_log_id: int) -> None:
+        """Delete a draft import (previewing or cancelled): file + log + rows. Frees quota."""
+        result = await self.db.execute(
+            select(ImportLog).where(ImportLog.id == import_log_id, ImportLog.user_id == user.id)
+        )
+        log = result.scalar_one_or_none()
+        if not log:
+            raise NotFoundError("Import")
+        if log.status not in ("previewing", "cancelled"):
+            raise ValidationError(
+                "Seuls les imports en attente ou annulés peuvent être supprimés définitivement."
+            )
+        if log.file_path:
+            self.file_service.delete_file(log.file_path)
+        await self.db.delete(log)
+        await self.db.flush()
+
+    async def delete_import_file(self, user: User, import_log_id: int) -> None:
+        """Delete the stored source file for an import (keeps rows and transactions)."""
+        result = await self.db.execute(
+            select(ImportLog).where(ImportLog.id == import_log_id, ImportLog.user_id == user.id)
+        )
+        log = result.scalar_one_or_none()
+        if not log:
+            raise NotFoundError("Import")
+        if not log.file_path:
+            return
+
+        # Delete physical file and clear metadata so quota reflects current usage
+        self.file_service.delete_file(log.file_path)
+        log.file_path = None
+        log.file_size = 0
         await self.db.flush()
 
     # ── History & Detail ──────────────────────────────────────────────
@@ -390,6 +440,16 @@ class ImportService:
         count_q = select(func.count()).select_from(query.subquery())
         total = (await self.db.execute(count_q)).scalar() or 0
 
+        # Storage usage (sum of original file sizes) and quota (10 MiB)
+        usage_q = await self.db.execute(
+            select(func.coalesce(func.sum(ImportLog.file_size), 0)).where(
+                ImportLog.user_id == user.id,
+                ImportLog.file_path.is_not(None),
+            )
+        )
+        storage_usage = int(usage_q.scalar() or 0)
+        storage_quota = 10 * 1024 * 1024
+
         # Paginate
         query = query.offset((page - 1) * per_page).limit(per_page)
         result = await self.db.execute(query)
@@ -402,6 +462,8 @@ class ImportService:
                 "page": page,
                 "per_page": per_page,
                 "pages": (total + per_page - 1) // per_page if per_page else 1,
+                "storage_usage_bytes": storage_usage,
+                "storage_quota_bytes": storage_quota,
             },
         }
 
@@ -443,6 +505,68 @@ class ImportService:
             "rows": rows,
             "file_downloadable": bool(log.file_path and self.file_service.file_exists(log.file_path)),
         }
+
+    async def force_import_row(self, user: User, import_log_id: int, row_id: int) -> dict:
+        """Force-import a duplicate row a posteriori (import must be done). Creates the transaction from raw_data."""
+        result = await self.db.execute(
+            select(ImportLog)
+            .options(selectinload(ImportLog.rows))
+            .where(ImportLog.id == import_log_id, ImportLog.user_id == user.id)
+        )
+        log = result.scalar_one_or_none()
+        if not log:
+            raise NotFoundError("Import")
+        if log.status != "done":
+            raise ValidationError("Seuls les imports terminés permettent un forçage a posteriori.")
+        if not log.account_id:
+            raise ValidationError("Import sans compte associé.")
+        row = next((r for r in log.rows if r.id == row_id), None)
+        if not row:
+            raise NotFoundError("Ligne d'import")
+        if row.status not in ("duplicate_exact", "duplicate_fuzzy"):
+            raise ValidationError("Seules les lignes en doublon peuvent être forcées.")
+
+        raw = row.raw_data or {}
+        try:
+            txn_date = date.fromisoformat(raw.get("date") or "")
+        except (TypeError, ValueError):
+            raise ValidationError("Date invalide dans la ligne.")
+        try:
+            amount = Decimal(str(raw.get("amount") or "0").replace(",", "."))
+        except Exception:
+            raise ValidationError("Montant invalide dans la ligne.")
+        label = (raw.get("label") or "").strip()
+        memo = (raw.get("memo") or "").strip()
+        label_raw = f"{label} — {memo}".strip() if memo and memo != label else (label or memo or "(sans libellé)")
+
+        acc_result = await self.db.execute(select(Account).where(Account.id == log.account_id))
+        account = acc_result.scalar_one_or_none()
+        if not account or account.user_id != user.id:
+            raise NotFoundError("Compte")
+
+        dedup_hash = self._compute_hash(txn_date, amount, label or "(sans libellé)", index=1)
+        dedup_hash = f"{dedup_hash}_forced_{row.id}"
+        parsed_metadata = parse_label(label_raw)
+        fmt = log.format or "csv"
+        txn = Transaction(
+            account_id=log.account_id,
+            date=txn_date,
+            label_raw=label_raw,
+            parsed_metadata=parsed_metadata,
+            amount=amount,
+            currency=account.currency,
+            dedup_hash=dedup_hash,
+            source=f"import_{fmt}",
+            import_log_id=log.id,
+        )
+        self.db.add(txn)
+        await self.db.flush()
+        row.transaction_id = txn.id
+        row.status = "forced"
+        log.imported_count = (log.imported_count or 0) + 1
+        log.duplicate_count = max(0, (log.duplicate_count or 0) - 1)
+        await self.db.flush()
+        return {"transaction_id": txn.id}
 
     # ── Legacy single-phase import (kept for backward compat) ─────────
 

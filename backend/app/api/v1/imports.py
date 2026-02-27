@@ -2,7 +2,7 @@
 
 import structlog
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, get_db
@@ -77,11 +77,12 @@ async def download_import_file(
         from app.core.exceptions import NotFoundError
         raise NotFoundError("File")
 
-    full_path = fs.get_full_path(import_log.file_path)
-    return FileResponse(
-        path=str(full_path),
-        filename=import_log.filename,
+    # Read original content (handles compression internally) and stream it back
+    content = fs.read_file(import_log.file_path)
+    return StreamingResponse(
+        iter([content]),
         media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{import_log.filename}"'},
     )
 
 
@@ -91,6 +92,40 @@ async def cancel_import(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Cancel a previewing import."""
+    """Cancel a previewing import (set status to cancelled)."""
     service = ImportService(db)
     await service.cancel_import(user=current_user, import_log_id=import_id)
+
+
+@router.delete("/{import_id}/draft", status_code=204)
+async def delete_import_draft(
+    import_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a draft import (previewing or cancelled): file, log and rows. Frees quota."""
+    service = ImportService(db)
+    await service.delete_import_draft(user=current_user, import_log_id=import_id)
+
+
+@router.delete("/{import_id}/file", status_code=204)
+async def delete_import_file(
+    import_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete the stored source file for an import (keeps history and transactions)."""
+    service = ImportService(db)
+    await service.delete_import_file(user=current_user, import_log_id=import_id)
+
+
+@router.post("/{import_id}/rows/{row_id}/force")
+async def force_import_row(
+    import_id: int,
+    row_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Force-import a duplicate row a posteriori (creates the transaction from raw_data)."""
+    service = ImportService(db)
+    return await service.force_import_row(user=current_user, import_log_id=import_id, row_id=row_id)

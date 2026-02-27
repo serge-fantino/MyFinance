@@ -132,6 +132,21 @@ export const transactionService = {
     await api.delete(`/imports/${importId}`);
   },
 
+  /** Delete a draft import (previewing or cancelled): file, log and rows. Frees quota. */
+  async deleteImportDraft(importId: number): Promise<void> {
+    await api.delete(`/imports/${importId}/draft`);
+  },
+
+  /** Force-import a duplicate row a posteriori (import must be done). */
+  async forceImportRow(importId: number, rowId: number): Promise<{ transaction_id: number }> {
+    const response = await api.post(`/imports/${importId}/rows/${rowId}/force`);
+    return response.data;
+  },
+
+  async deleteImportFile(importId: number): Promise<void> {
+    await api.delete(`/imports/${importId}/file`);
+  },
+
   // ── Label parsing & embedding classification ───────
 
   async parseLabels(accountId?: number, force = false): Promise<ParseLabelsResult> {
