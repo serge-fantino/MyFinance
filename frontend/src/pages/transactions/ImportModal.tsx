@@ -4,14 +4,14 @@ import { Alert } from "../../components/ui/Alert";
 import { Input } from "../../components/ui/Input";
 import { transactionService } from "../../services/transaction.service";
 import type { Account } from "../../types/account.types";
-import type { ImportPreviewResult, ImportResult } from "../../types/transaction.types";
+import type { ImportPreviewResult, ImportResult, ImportRowResponse } from "../../types/transaction.types";
 
 interface ImportModalProps {
   accounts: Account[];
   onClose: (refreshNeeded: boolean) => void;
 }
 
-type ImportStep = "form" | "confirm" | "result";
+type ImportStep = "form" | "confirm" | "preview" | "result";
 
 export function ImportModal({ accounts, onClose }: ImportModalProps) {
   const [accountId, setAccountId] = useState<string>(accounts[0]?.id.toString() || "");
@@ -24,6 +24,7 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [forcedRowIds, setForcedRowIds] = useState<Set<number>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -38,19 +39,23 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
       setFile(f);
       setStep("form");
       setPreview(null);
+      setForcedRowIds(new Set());
     }
   };
 
   const isOfxFile = file?.name ? /\.(ofx|qfx|xml)$/i.test(file.name) : false;
   const canProceedWithoutAccount = isOfxFile && accounts.length === 0;
 
-  const handleNextOrImport = async () => {
+  const handleNextOrPreview = async () => {
     if (!file) return;
     if (!canProceedWithoutAccount && !accountId) return;
     setError(null);
     setIsUploading(true);
     try {
-      const previewResult = await transactionService.importPreview(file);
+      const previewResult = await transactionService.importPreview(
+        file,
+        accountId ? parseInt(accountId) : undefined,
+      );
       setPreview(previewResult);
 
       const hasOfxInfo = previewResult.file_account_info || previewResult.file_balance_info;
@@ -58,10 +63,9 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
       if (hasOfxInfo && (accounts.length > 0 || canCreateFromOfx)) {
         setStep("confirm");
         if (canProceedWithoutAccount) setAccountAction("create");
-      } else if (!canProceedWithoutAccount) {
-        await doImport(parseInt(accountId), "use", undefined);
       } else {
-        setError("Le fichier OFX ne contient pas d'informations de compte. Import impossible.");
+        // Go directly to preview for non-OFX files
+        setStep("preview");
       }
     } catch {
       setError("Erreur lors de la lecture du fichier.");
@@ -70,61 +74,177 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
     }
   };
 
-  const doImport = async (
-    targetAccountId: number,
-    action: "use" | "update" | "create",
-    name?: string,
-    useBalanceRef?: boolean
-  ) => {
-    if (!file) return;
+  const handleConfirmToPreview = () => {
+    setStep("preview");
+  };
+
+  const toggleForceRow = (rowId: number) => {
+    setForcedRowIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  };
+
+  const doConfirmImport = async () => {
+    if (!preview) return;
+    const targetAccountId = accountId ? parseInt(accountId) : 0;
     setError(null);
     setIsUploading(true);
     try {
-      const importResult = await transactionService.import(
-        targetAccountId,
-        file,
-        action,
-        name,
-        useBalanceRef
-      );
+      const importResult = await transactionService.importConfirm({
+        import_log_id: preview.import_log_id,
+        account_id: targetAccountId,
+        forced_row_ids: Array.from(forcedRowIds),
+        account_action: accountAction,
+        new_account_name: accountAction === "create" ? newAccountName.trim() : undefined,
+        apply_balance_reference: applyBalanceReference && !!preview.file_balance_info,
+      });
       setResult(importResult);
       setStep("result");
     } catch {
-      setError("Erreur lors de l'import. Vérifiez le format du fichier.");
+      setError("Erreur lors de l'import.");
     } finally {
       setIsUploading(false);
     }
   };
 
-  const handleConfirmImport = () => {
-    const useBalanceRef = applyBalanceReference && !!preview?.file_balance_info;
-    if (accountAction === "create" && newAccountName.trim()) {
-      const targetId = accountId ? parseInt(accountId) : 0;
-      doImport(targetId, "create", newAccountName.trim(), useBalanceRef);
-    } else if (accountAction === "create") {
-      setError("Indiquez un nom pour le nouveau compte.");
-    } else {
-      doImport(parseInt(accountId), accountAction, undefined, useBalanceRef);
-    }
-  };
-
   const fileAccountInfo = preview?.file_account_info;
+
+  // Group rows by status for preview
+  const importableRows = preview?.rows.filter(
+    (r) => r.status === "imported" || forcedRowIds.has(r.id),
+  ) || [];
+  const duplicateRows = preview?.rows.filter(
+    (r) => (r.status === "duplicate_exact" || r.status === "duplicate_fuzzy") && !forcedRowIds.has(r.id),
+  ) || [];
+  const errorRows = preview?.rows.filter((r) => r.status === "rejected") || [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={() => onClose(!!result)} />
 
-      <div className="relative bg-card rounded-xl shadow-xl border w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+      <div className="relative bg-card rounded-xl shadow-xl border w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
         <div className="p-6">
           <h2 className="text-xl font-semibold mb-1">Importer des transactions</h2>
           <p className="text-sm text-muted-foreground mb-6">
-            Importez un relevé bancaire au format OFX, CSV ou Excel.
+            {step === "preview"
+              ? "Vérifiez les transactions avant de confirmer l'import."
+              : "Importez un relevé bancaire au format OFX, CSV ou Excel."}
           </p>
 
           {error && <Alert variant="destructive" className="mb-4">{error}</Alert>}
 
-          {step === "confirm" && (fileAccountInfo || preview?.file_balance_info) ? (
-            /* Confirmation OFX : compte et/ou solde détectés */
+          {step === "preview" && preview ? (
+            /* ── Step: Preview rows ── */
+            <div className="space-y-4">
+              {/* Summary bar */}
+              <div className="flex gap-3 text-sm flex-wrap">
+                <span className="px-2 py-1 rounded bg-muted">
+                  {preview.total_rows} lignes
+                </span>
+                <span className="px-2 py-1 rounded bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">
+                  {importableRows.length} à importer
+                </span>
+                {duplicateRows.length > 0 && (
+                  <span className="px-2 py-1 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300">
+                    {duplicateRows.length} doublons
+                  </span>
+                )}
+                {errorRows.length > 0 && (
+                  <span className="px-2 py-1 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">
+                    {errorRows.length} erreurs
+                  </span>
+                )}
+              </div>
+
+              {preview.file_already_imported && (
+                <Alert variant="destructive">
+                  Ce fichier a déjà été importé. Les transactions en doublon seront ignorées.
+                </Alert>
+              )}
+
+              {/* Importable rows */}
+              {importableRows.length > 0 && (
+                <RowSection
+                  title={`À importer (${importableRows.length})`}
+                  color="emerald"
+                  rows={importableRows}
+                  defaultOpen={importableRows.length <= 20}
+                />
+              )}
+
+              {/* Duplicate rows */}
+              {duplicateRows.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-300">
+                    Doublons ({duplicateRows.length})
+                  </h4>
+                  <div className="border rounded-lg overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="bg-yellow-50 dark:bg-yellow-900/20">
+                        <tr>
+                          <th className="px-3 py-2 text-left w-8">Forcer</th>
+                          <th className="px-3 py-2 text-left">#</th>
+                          <th className="px-3 py-2 text-left">Date</th>
+                          <th className="px-3 py-2 text-left">Libellé</th>
+                          <th className="px-3 py-2 text-right">Montant</th>
+                          <th className="px-3 py-2 text-left">Type</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {duplicateRows.map((row) => (
+                          <DuplicateRow
+                            key={row.id}
+                            row={row}
+                            forced={forcedRowIds.has(row.id)}
+                            onToggle={() => toggleForceRow(row.id)}
+                          />
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Error rows */}
+              {errorRows.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium text-red-700 dark:text-red-300">
+                    Erreurs ({errorRows.length})
+                  </h4>
+                  <div className="text-xs space-y-1 max-h-32 overflow-y-auto">
+                    {errorRows.map((row) => (
+                      <div key={row.id} className="px-3 py-1 bg-red-50 dark:bg-red-900/20 rounded">
+                        Ligne {row.row_index + 1}: {row.reject_reason || "Erreur inconnue"}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => setStep(fileAccountInfo ? "confirm" : "form")}
+                >
+                  Retour
+                </Button>
+                <Button
+                  className="flex-1"
+                  disabled={importableRows.length === 0}
+                  isLoading={isUploading}
+                  onClick={doConfirmImport}
+                >
+                  Confirmer l'import ({importableRows.length})
+                </Button>
+              </div>
+            </div>
+          ) : step === "confirm" && (fileAccountInfo || preview?.file_balance_info) ? (
+            /* ── Step: OFX confirm ── */
             <div className="space-y-4">
               {fileAccountInfo && accountAction !== "create" && accounts.length > 0 && (
                 <div className="space-y-1.5">
@@ -300,16 +420,16 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                   className="flex-1"
                   disabled={accountAction === "create" && !newAccountName.trim()}
                   isLoading={isUploading}
-                  onClick={handleConfirmImport}
+                  onClick={handleConfirmToPreview}
                 >
-                  Confirmer et importer
+                  Voir le détail
                 </Button>
               </div>
             </div>
           ) : result ? (
-            /* Import result */
+            /* ── Step: Result ── */
             <div className="space-y-4">
-              <Alert variant="success">Import termine avec succes !</Alert>
+              <Alert variant="success">Import terminé avec succès !</Alert>
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-muted rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold">{result.total_rows}</p>
@@ -317,16 +437,16 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                 </div>
                 <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold text-emerald-600">{result.imported_count}</p>
-                  <p className="text-xs text-muted-foreground">Importees</p>
+                  <p className="text-xs text-muted-foreground">Importées</p>
                 </div>
                 <div className="bg-yellow-50 dark:bg-yellow-900/20 rounded-lg p-3 text-center">
                   <p className="text-2xl font-bold text-yellow-600">{result.duplicate_count}</p>
-                  <p className="text-xs text-muted-foreground">Doublons ignores</p>
+                  <p className="text-xs text-muted-foreground">Doublons ignorés</p>
                 </div>
                 {result.rules_applied != null && result.rules_applied > 0 ? (
                   <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-center">
                     <p className="text-2xl font-bold text-blue-600">{result.rules_applied}</p>
-                    <p className="text-xs text-muted-foreground">Classifiees (regles)</p>
+                    <p className="text-xs text-muted-foreground">Classifiées (règles)</p>
                   </div>
                 ) : (
                   <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-3 text-center">
@@ -346,7 +466,7 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
               <Button className="w-full" onClick={() => onClose(true)}>Fermer</Button>
             </div>
           ) : (
-            /* Import form */
+            /* ── Step: Form ── */
             <div className="space-y-4">
               {!canProceedWithoutAccount && (
                 <div className="space-y-1.5">
@@ -408,7 +528,7 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                   <li><strong>OFX / QFX</strong> — Format standard des banques (recommandé). Détection automatique.</li>
                   <li><strong>CSV / Excel</strong> — Colonnes attendues : <strong>date</strong>, <strong>montant</strong> (ou amount), <strong>libellé</strong> (ou label/description).</li>
                 </ul>
-                <p className="mt-1">Les doublons sont automatiquement détectés et ignorés.</p>
+                <p className="mt-1">Les doublons sont détectés et vous pourrez les vérifier avant de confirmer l'import.</p>
               </div>
 
               <div className="flex gap-3">
@@ -419,9 +539,9 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
                   className="flex-1"
                   disabled={!file || (!canProceedWithoutAccount && !accountId)}
                   isLoading={isUploading}
-                  onClick={handleNextOrImport}
+                  onClick={handleNextOrPreview}
                 >
-                  {isOfxFile ? "Suivant" : "Importer"}
+                  {isOfxFile ? "Suivant" : "Analyser"}
                 </Button>
               </div>
             </div>
@@ -429,5 +549,112 @@ export function ImportModal({ accounts, onClose }: ImportModalProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+// ── Sub-components ──────────────────────────────────────────
+
+function RowSection({
+  title,
+  color,
+  rows,
+  defaultOpen = true,
+}: {
+  title: string;
+  color: string;
+  rows: ImportRowResponse[];
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const colorClasses: Record<string, string> = {
+    emerald: "text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-900/20",
+  };
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`text-sm font-medium flex items-center gap-2 ${colorClasses[color] || ""} px-2 py-1 rounded`}
+      >
+        <svg
+          className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-90" : ""}`}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </svg>
+        {title}
+      </button>
+      {open && (
+        <div className="border rounded-lg overflow-hidden">
+          <table className="w-full text-xs">
+            <thead className="bg-muted/50">
+              <tr>
+                <th className="px-3 py-2 text-left">#</th>
+                <th className="px-3 py-2 text-left">Date</th>
+                <th className="px-3 py-2 text-left">Libellé</th>
+                <th className="px-3 py-2 text-right">Montant</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {rows.map((row) => (
+                <tr key={row.id} className="hover:bg-muted/30">
+                  <td className="px-3 py-1.5 text-muted-foreground">{row.row_index + 1}</td>
+                  <td className="px-3 py-1.5">{row.raw_data.date || "—"}</td>
+                  <td className="px-3 py-1.5 truncate max-w-[250px]">{row.raw_data.label || "—"}</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{row.raw_data.amount || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DuplicateRow({
+  row,
+  forced,
+  onToggle,
+}: {
+  row: ImportRowResponse;
+  forced: boolean;
+  onToggle: () => void;
+}) {
+  const matchType = row.status === "duplicate_exact" ? "Exact" : "Approché";
+  return (
+    <>
+      <tr className={`hover:bg-muted/30 ${forced ? "bg-emerald-50/50 dark:bg-emerald-900/10" : ""}`}>
+        <td className="px-3 py-1.5 text-center">
+          <input
+            type="checkbox"
+            checked={forced}
+            onChange={onToggle}
+            className="rounded"
+            title="Forcer l'import de cette ligne"
+          />
+        </td>
+        <td className="px-3 py-1.5 text-muted-foreground">{row.row_index + 1}</td>
+        <td className="px-3 py-1.5">{row.raw_data.date || "—"}</td>
+        <td className="px-3 py-1.5 truncate max-w-[200px]">{row.raw_data.label || "—"}</td>
+        <td className="px-3 py-1.5 text-right font-mono">{row.raw_data.amount || "—"}</td>
+        <td className="px-3 py-1.5">
+          <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+            row.status === "duplicate_exact"
+              ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300"
+              : "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300"
+          }`}>
+            {matchType}
+          </span>
+        </td>
+      </tr>
+      {row.duplicate_of_summary && (
+        <tr className="bg-muted/20">
+          <td colSpan={6} className="px-8 py-1 text-[10px] text-muted-foreground">
+            Doublon de : "{row.duplicate_of_summary.label}" du {row.duplicate_of_summary.date} ({row.duplicate_of_summary.amount} €)
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

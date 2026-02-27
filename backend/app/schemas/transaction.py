@@ -76,15 +76,44 @@ class FileBalanceInfo(BaseModel):
     source: str  # ledger | avail
 
 
+class ImportRowResponse(BaseModel):
+    """A single row from an import file with its dedup status."""
+    id: int
+    row_index: int
+    status: str  # imported, duplicate_exact, duplicate_fuzzy, rejected, forced
+    raw_data: dict  # {date, amount, label, memo}
+    transaction_id: int | None = None
+    duplicate_of_id: int | None = None
+    duplicate_of_summary: dict | None = None  # {id, date, label, amount}
+    reject_reason: str | None = None
+
+
 class ImportPreviewResult(BaseModel):
-    """Preview of file before import (OFX account info, row count)."""
+    """Preview of file before import — now includes row-level dedup results."""
+    import_log_id: int
     format: str  # csv, excel, ofx
     total_rows: int
-    file_account_info: dict | None = None  # OFX: bank_id, branch_id, acct_id, acct_type, acct_key, institution
-    file_balance_info: FileBalanceInfo | None = None  # OFX: balance at date (for calibration)
+    to_import: int
+    duplicate_count: int
+    error_count: int
+    rows: list[ImportRowResponse]
+    file_already_imported: bool = False
+    file_account_info: dict | None = None
+    file_balance_info: FileBalanceInfo | None = None
+
+
+class ImportConfirmRequest(BaseModel):
+    """Request to confirm an import after preview."""
+    import_log_id: int
+    account_id: int
+    forced_row_ids: list[int] = []  # ImportRow IDs to force-import despite duplicate status
+    account_action: str = "use"  # use | update | create
+    new_account_name: str | None = None
+    apply_balance_reference: bool = False
 
 
 class ImportResult(BaseModel):
+    import_log_id: int | None = None
     total_rows: int
     imported_count: int
     duplicate_count: int
@@ -92,6 +121,35 @@ class ImportResult(BaseModel):
     errors: list[str] | None = None
     rules_applied: int | None = None
     embeddings_computed: int | None = None
+
+
+class ImportLogResponse(BaseModel):
+    """Summary of an import log for the history list."""
+    id: int
+    account_id: int | None = None
+    filename: str
+    format: str
+    status: str
+    total_rows: int | None = None
+    imported_count: int | None = None
+    duplicate_count: int | None = None
+    error_count: int | None = None
+    file_size: int | None = None
+    file_hash: str | None = None
+    created_at: datetime | None = None
+
+
+class ImportDetailResponse(BaseModel):
+    """Full import detail with all rows."""
+    import_log: ImportLogResponse
+    rows: list[ImportRowResponse]
+    file_downloadable: bool = False
+
+
+class ImportHistoryResponse(BaseModel):
+    """Paginated import history."""
+    data: list[ImportLogResponse]
+    meta: dict  # {total, page, per_page, pages}
 
 
 # ── Embedding classification schemas ────────────────────

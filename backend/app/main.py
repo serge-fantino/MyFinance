@@ -81,6 +81,7 @@ from app.api.v1 import (  # noqa: E402
     classification_rules,
     clusters,
     export_import,
+    imports,
     transactions,
     users,
 )
@@ -96,3 +97,4 @@ app.include_router(clusters.router, prefix="/api/v1/clusters", tags=["clusters"]
 app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
 app.include_router(ai.router, prefix="/api/v1/ai", tags=["ai"])
 app.include_router(export_import.router, prefix="/api/v1/export-import", tags=["export-import"])
+app.include_router(imports.router, prefix="/api/v1/imports", tags=["imports"])
